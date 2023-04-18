@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Blender Layer</title>
+</head>
+<body>
+<h1>Blender Layer</h1>
+<h2>Getting Started</h2>
+<ol>
+<li>Install <a href="https://www.blender.org/">Blender</a></li>
+<li>Make sure the 'Blender Layer' add-on is enabled in Krita</li>
+<li>Open a document</li>
+<li>Connect to Blender:
+<ol>
+    <li><b>Drag and drop</b> a .blend File into Krita. This will start Blender, connect and directly open the .blend file.<br/>(You might be asked to select the path to the blender executable. Under Windows and Blender 3.4 for example select 'C:\Program Files\Blender Foundation\Blender 3.4\blender.exe')</li>
+    <li>Or use the <b>'Start Blender'</b> button in the 'Blender Layer' Docker. This will start Blender with a fresh file and connect automatically.</li>
+    <li>(Advanced) Or manually install the <b>companion add-on</b> for Blender. Goto 'Preferences &rarr; Add-Ons &rarr; Install...' and select <b>'blenderLayerClient.py'</b> from the blender_layer folder of the add-on. (Under Windows installed Krita add-ons can be found in '%APPDATA%\krita\pykrita').<br/>In Krita, start the server from the docker, then in Blender from the header of a 3D View choose 'View &rarr; Connect to Krita' make sure host and port match the settings in Krita and press ok.</li>
+</ol>
+</li>
+</ol>
+<h2>Usage</h2>
+<h3>Navigation</h3>
+Using the navigation widget in the docker:
+<ul>
+<li><b>Drag</b> to rotate</li>
+<li><b>Shift + Drag</b> to pan</li>
+<li><b>Ctrl + Drag</b> vertically to zoom</li>
+</ul>
+You can also change the view from outside the docker with <b>Alt + Middle Mouse Button</b>.
+
+<h3>Assistants</h3>
+In order to create painting assistants matching Blender's perspective use the <b>'Create Assistant Set'</b> button in the docker.
+You will be asked to save an xml file. Make sure the assistant tool is selected, then open the Tool Settings and press the <b>'Load Assistant Set'</b> Button (Folder icon) and select the file you have just created.</br>
+The colored axis can be disabled in settings.
+
+<h3>Library</h3>
+The docker allows you to append a selection of objects to the current scene. By default, this includes </b>posable mannequin models</b> 'Body-chan' and 'Body-kun'. (CC-0 License, created by <a href=\"https://blendswap.com/blend/23521\">vinchau</a>).<br>You can configure additional objects from the settings menu by providing a .blend file and the path to objects within the file e.g. Object/Cube. (See Blender's <a href="https://docs.blender.org/manual/en/latest/files/linked_libraries/link_append.html">append</a> function for reference)<br/>
+<br/>
+Blender Layer also supports Blender's asset based <a href="https://docs.blender.org/manual/en/latest/animation/armatures/posing/editing/pose_library.html"><b>Pose Library</a></b>. If your Blender file contains pose assets, these will show up in the 'Library' section of the docker and can be directly applied from within Krita.
+</body>
+</html>

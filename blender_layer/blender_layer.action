@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ActionCollection version="2" name="Scripts">
+  <Actions category="Scripts">
+    <text>Blender Layer</text>
+    <Action name="blender_layer_blender">
+      <icon></icon>
+      <text>Start Blender</text>
+      <whatsThis></whatsThis>
+      <toolTip>Start Blender and connect automagically</toolTip>
+      <iconText></iconText>
+      <activationFlags>0</activationFlags>
+      <activationConditions>0</activationConditions>
+      <shortcut></shortcut>
+      <isCheckable>false</isCheckable>
+      <statusTip></statusTip>
+    </Action>
+    <Action name="blender_layer_update">
+      <icon></icon>
+      <text>Update Frame</text>
+      <whatsThis></whatsThis>
+      <toolTip>Update the current frame</toolTip>
+      <iconText></iconText>
+      <activationFlags>0</activationFlags>
+      <activationConditions>0</activationConditions>
+      <shortcut></shortcut>
+      <isCheckable>false</isCheckable>
+      <statusTip></statusTip>
+    </Action>
+    <Action name="blender_layer_update_animation">
+      <icon></icon>
+      <text>Update Animation</text>
+      <whatsThis></whatsThis>
+      <toolTip>Update multiple frames and import them as an animation</toolTip>
+      <iconText></iconText>
+      <activationFlags>0</activationFlags>
+      <activationConditions>0</activationConditions>
+      <shortcut></shortcut>
+      <isCheckable>false</isCheckable>
+      <statusTip></statusTip>
+    </Action>
+    <Action name="blender_layer_render">
+      <icon></icon>
+      <text>Render Frame</text>
+      <whatsThis></whatsThis>
+      <toolTip>Start a render</toolTip>
+      <iconText></iconText>
+      <activationFlags>0</activationFlags>
+      <activationConditions>0</activationConditions>
+      <shortcut></shortcut>
+      <isCheckable>false</isCheckable>
+      <statusTip></statusTip>
+    </Action>
+    <Action name="blender_layer_render_animation">
+      <icon></icon>
+      <text>Render Animation</text>
+      <whatsThis></whatsThis>
+      <toolTip>Render multiple frames and import them as an animation</toolTip>
+      <iconText></iconText>
+      <activationFlags>0</activationFlags>
+      <activationConditions>0</activationConditions>
+      <shortcut></shortcut>
+      <isCheckable>false</isCheckable>
+      <statusTip></statusTip>
+    </Action>
+  </Actions>
+</ActionCollection>
