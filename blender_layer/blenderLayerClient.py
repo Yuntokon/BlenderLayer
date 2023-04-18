@@ -722,7 +722,7 @@ class BlenderLayerClient():
                 elif self.ticksWaitingForFrame == 120:
                     self.sendMessage(('status', "Waiting for on draw event... Make sure Blender is not minimized"))
             
-            if self.backgroundDraw and (self.requestFrame or self.updateMode == 0):
+            if self.backgroundDraw and (self.requestFrame or self.updateMode == 0 or self.isAnimation and not self.isRendering):
                 self.draw(space, region)
                 
         return 0.0166
