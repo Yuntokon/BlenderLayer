@@ -202,7 +202,7 @@ class NavigateWidget(QWidget):
 
         font = painter.font()
         #font.setFamily('Times')
-        font.setPointSize(8.5)
+        font.setPointSize(8)
         font.setBold(True)
         painter.setFont(font)
 
@@ -284,13 +284,13 @@ class NavigateWidget(QWidget):
         brush = self.palette().base()
         painter.setBrush(brush)
         s = r3 * 1.15
-        s2 = r3 * 1.25
+        s2 = int(r3 * 1.25)
         x = w - r3 * 1.5
         y = h * 0.5 - r3 * 1.5 - m * 0.1
         if self.highlight == 2:
             painter.setBrush(self.palette().light())
         painter.drawEllipse(QPointF(x, y), r3, r3);
-        instance.icon('tool_zoom').paint(painter, x - s * 0.5, y - s * 0.5, s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+        instance.icon('tool_zoom').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
         if self.highlight == 2:
             painter.setBrush(brush)
 
@@ -298,7 +298,7 @@ class NavigateWidget(QWidget):
         if self.highlight == 3:
             painter.setBrush(self.palette().light())
         painter.drawEllipse(QPointF(x, y), r3, r3);
-        instance.icon('tool_pan').paint(painter, x - s * 0.5, y - s * 0.5, s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+        instance.icon('tool_pan').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
         if self.highlight == 3:
             painter.setBrush(brush)
             
@@ -306,4 +306,4 @@ class NavigateWidget(QWidget):
             painter.setBrush(self.palette().light())
         y = h * 0.5 + r3 * 1.5 + m * 0.1
         painter.drawEllipse(QPointF(x, y), r3, r3);
-        instance.icon('krita_tool_grid' if (self.ortho) else 'tool_perspectivegrid').paint(painter, x - s * 0.5, y - s * 0.5, s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+        instance.icon('krita_tool_grid' if (self.ortho) else 'tool_perspectivegrid').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
