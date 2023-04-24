@@ -87,6 +87,8 @@ class BlenderLayerServer(QRunnable):
                 convertBGR = convertBGR and not floating and ('RGB' in d.colorModel())
                 l.setColorSpace(d.colorModel(), d.colorDepth(), d.colorProfile())
                 
+            modifiedSupported = getattr(d, "setModified", None) != None
+
             width = d.width()
             height = d.height()
             orgWidth = width
@@ -191,7 +193,8 @@ class BlenderLayerServer(QRunnable):
                                             elif shm:
                                                 l.setPixelData(QByteArray(shm.buf.tobytes()), x, y, w, h)
                                             d.refreshProjection()
-                                            d.setModified(True)
+                                            if modifiedSupported:
+                                                d.setModified(True)
                                         elif msg[0] == 'updateFromFile' or msg[0] == 'updateFrameFromFile':
                                             frame = QImage(msg[3])
                                             if format == 'RGBA8':
@@ -224,7 +227,8 @@ class BlenderLayerServer(QRunnable):
                                                 d.refreshProjection()
                                             else:
                                                 self.signals.error.emit(i18n("Warning: Failed to open a rendered frame"))
-                                            d.setModified(True)
+                                            if modifiedSupported:
+                                                d.setModified(True)
                                         else:
                                             l.setPixelData(QByteArray(bytes(d.width() * d.height() * 4)), 0, 0, d.width(), d.height())
 
