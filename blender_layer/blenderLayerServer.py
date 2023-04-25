@@ -329,7 +329,7 @@ class BlenderLayerServer(QRunnable):
                 l.setLocked(False)
                 self.signals.connected.emit(False, None)       
         except socket.error as e:
-            if e.errno == errno.WSAECONNRESET or e.errno == errno.ECONNABORTED:
+            if e.errno == errno.ECONNRESET or e.errno == errno.ECONNABORTED:
                 pass
             elif e.errno == errno.EADDRINUSE:
                 resultStr = i18n("Port occupied. Change it in settings")
