@@ -886,7 +886,7 @@ class BlenderLayerClient():
                       ( 0, 0, -1.0, 0)))        
         else:
             vm = context.scene.camera.matrix_world.inverted()
-            pm = context.scene.camera.calc_matrix_camera(context.evaluated_depsgraph_get(), x=self.regionWidth, y=self.regionHeight)
+            pm = context.scene.camera.calc_matrix_camera(context.view_layer.depsgraph, x=self.regionWidth, y=self.regionHeight)
             
             if self.regionViewport:
                 m = max(self.width, self.height)
