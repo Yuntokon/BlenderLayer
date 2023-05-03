@@ -820,7 +820,7 @@ class BlenderLayer(DockWidget):
         
     def determineBlenderPath(self, dialog = True):
         if not self.settings.blenderPath:
-           try:
+            try:
                 import shutil
                 p = shutil.which('blender')
                 if p and os.path.isfile(p):
