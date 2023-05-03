@@ -1,4 +1,4 @@
-import sys, math, threading, distutils.spawn
+import sys, math, threading
 from krita import *
 
 from PyQt5.QtCore import Qt, QThreadPool
@@ -820,17 +820,21 @@ class BlenderLayer(DockWidget):
         
     def determineBlenderPath(self, dialog = True):
         if not self.settings.blenderPath:
-            p = distutils.spawn.find_executable('blender')
-            if p and os.path.isfile(p):
-                self.settings.blenderPath = p
-                
-            elif os.path.isdir('C:\Program Files\Blender Foundation'):
-                versions = sorted(os.listdir('C:\Program Files\Blender Foundation'), reverse=True)
-                for ver in versions:
-                    p = os.path.join('C:\Program Files\Blender Foundation', ver, 'blender.exe')
-                    if os.path.isfile(p):
-                        self.settings.blenderPath = p
-                        break
+           try:
+                import shutil
+                p = shutil.which('blender')
+                if p and os.path.isfile(p):
+                    self.settings.blenderPath = p
+                    
+                elif os.path.isdir('C:\Program Files\Blender Foundation'):
+                    versions = sorted(os.listdir('C:\Program Files\Blender Foundation'), reverse=True)
+                    for ver in versions:
+                        p = os.path.join('C:\Program Files\Blender Foundation', ver, 'blender.exe')
+                        if os.path.isfile(p):
+                            self.settings.blenderPath = p
+                            break
+            except e:
+                print(e)
             
             if not self.settings.blenderPath:
                 if dialog:
