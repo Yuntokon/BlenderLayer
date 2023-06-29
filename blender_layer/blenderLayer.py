@@ -1297,7 +1297,7 @@ class BlenderLayer(DockWidget):
             d.rootNode().addChildNode(l, None)
 
         name = fileName
-        if self.settings.relPath and self.activeInFile:
+        if name and self.settings.relPath and self.activeInFile:
             name = os.path.relpath(name, os.path.dirname(self.activeInFile))
             
         if len(l.childNodes()) == 0:
