@@ -38,9 +38,15 @@ class BlenderLayerServer(QRunnable):
         super().__init__()
         self.settings = settings
         self.running = False
+        self.requestTexture = 0
+        self.requestTime = 0
         self.signals = RunnableSignals()
         self.sendQueue = SimpleQueue()
         
+    def requestTextureDelayed(self, mode):
+        self.requestTime = time.monotonic()
+        self.requestTexture = mode
+
     def sendMessage(self, msg):
         self.sendQueue.put(msg)
 
@@ -64,11 +70,17 @@ class BlenderLayerServer(QRunnable):
 
             l.setLocked(False)
 
+            l2 = d.nodeByName('Projection')
+            if l2 == None or l2 == 0:
+                l2 = d.createNode('Projection', 'paintLayer')
+                root.addChildNode(l2, None)               
+
             format = "RGBA8"
             bytesPerPixel = 4
             convertBGR = self.settings.convertBGR
             if self.settings.overrideSRGB:    
                 l.setColorSpace('RGBA', 'U8', 'sRGB-elle-V2-srgbtrc.icc')
+                l2.setColorSpace('RGBA', 'U8', 'sRGB-elle-V2-srgbtrc.icc')
             else:
                 floating = False
                 depth = d.colorDepth()
@@ -86,7 +98,8 @@ class BlenderLayerServer(QRunnable):
                     floating = True
                 convertBGR = convertBGR and not floating and ('RGB' in d.colorModel())
                 l.setColorSpace(d.colorModel(), d.colorDepth(), d.colorProfile())
-                
+                l2.setColorSpace(d.colorModel(), d.colorDepth(), d.colorProfile())
+
             modifiedSupported = getattr(d, "setModified", None) != None
 
             width = d.width()
@@ -137,6 +150,9 @@ class BlenderLayerServer(QRunnable):
                             l = d.nodeByName(self.settings.layerName)
                         if l == None or l == 0:
                             raise Exception(i18n("Error: Layer not found"))
+                        
+                        if l2 == None or l2 == 0:
+                            l2 = d.nodeByName('Projection')
                             
                         if d.width() != width or d.height() != height:
                             if d.width() > orgWidth or d.height() > orgHeight and shm:
@@ -172,7 +188,6 @@ class BlenderLayerServer(QRunnable):
                                             while not l.hasKeyframeAtTime(t) and self.running:
                                                 time.sleep(0.01)
                                             l.setLocked(True)
-                                            d.waitForDone()
                                     if not locked and self.settings.lockFrames > 0:
                                         for i in range(1, 20):
                                             if d.tryBarrierLock():
@@ -221,7 +236,7 @@ class BlenderLayerServer(QRunnable):
                                                     #framesLocked = self.settings.lockFrames
                                                     #time.sleep(0.05)
                                                     if x > 0 or y > 0 or w < d.width() or h < d.height():
-                                                        l.setPixelData(QByteArray(bytes(d.width() * d.height() * 4)), 0, 0, d.width(), d.height())
+                                                        l.setPixelData(QByteArray(bytes(d.width() * d.height() * bytesPerPixel)), 0, 0, d.width(), d.height())
 
                                                 l.setPixelData(QByteArray.fromRawData(bits.asarray(frame.sizeInBytes())), x, y, w, h)
                                                 d.refreshProjection()
@@ -230,7 +245,7 @@ class BlenderLayerServer(QRunnable):
                                             if modifiedSupported:
                                                 d.setModified(True)
                                         else:
-                                            l.setPixelData(QByteArray(bytes(d.width() * d.height() * 4)), 0, 0, d.width(), d.height())
+                                            l.setPixelData(QByteArray(bytes(d.width() * d.height() * bytesPerPixel)), 0, 0, d.width(), d.height())
 
                                     elif self.settings.updateMode > 0:
                                         self.signals.error.emit(i18n("Warning: Failed to acquire lock. Dropping a frame"))
@@ -264,7 +279,6 @@ class BlenderLayerServer(QRunnable):
                                     #    if self.running and t % 10 == 0:
                                     #        sendObj(conn, 'wait')
                                          
-                                    d.waitForDone()                                         
                                     for t in range(start, end + 1):
                                         #keyframe = t % steps == 0
                                         #if keyframe and not l.hasKeyframeAtTime(t):
@@ -290,19 +304,50 @@ class BlenderLayerServer(QRunnable):
                                             if self.running:
                                                 sendObj(conn, 'wait')
 
-                                    d.waitForDone()
                                     l.setLocked(True)
                                 else:
                                     self.signals.msgReceived.emit(msg)
                              
-                            
+                        if self.requestTexture > 0:
+                            t = time.monotonic()
+                            if locked or d.tryBarrierLock():
+                                if t - self.requestTime > 0.1:
+                                    if self.requestTexture == 2 and l2 != None and l2 != 0:
+                                        bounds = l2.bounds().intersected(d.bounds())                                     
+                                        b = bytes(l2.pixelData(bounds.x(), bounds.y(), bounds.width(), bounds.height())) if bounds.width() > 0 else None
+                                    else:
+                                        bounds = d.bounds()
+                                        b = bytes(d.pixelData(bounds.x(), bounds.y(), bounds.width(), bounds.height()))
+                                    if b:
+                                        if shm and d.width() <= orgWidth and d.height() <= orgHeight:
+                                            shm.buf[:len(b)] = b
+                                            self.sendMessage(('updateTexture', l.name(), bounds.x(), bounds.y(), bounds.width(), bounds.height(), len(b)))
+                                        else:
+                                            self.sendMessage(('updateTexture', l.name(), bounds.x(), bounds.y(), bounds.width(), bounds.height(), len(b), b))
+                                        
+                                        if self.requestTexture == 2:
+                                            if l2 != None and l2 != 0:
+                                                bounds = l2.bounds()
+                                                l2.setPixelData(QByteArray(bytes(bounds.width() * bounds.height() * bytesPerPixel)), bounds.x(), bounds.y(), bounds.width(), bounds.height())
+                                            self.sendMessage(('projectTexture', l.name()))   
+                                    else:
+                                        print("Skipped")
+                                    self.requestTexture = 0
+                                    print("Time:", (time.monotonic() - t) * 1000)
+                                else:
+                                    time.sleep(0.01)
+                                if not locked:
+                                    d.unlock()
+                            else:
+                                self.requestTime = t
+                                
                         if locked:
                             framesLocked = framesLocked + 1
                             if framesLocked >= self.settings.lockFrames:
                                 d.unlock()
                                 locked = False
                                 framesLocked = 0
-                                
+
                         msgs = []
                         lastType = None
                         while not self.sendQueue.empty():
@@ -332,7 +377,7 @@ class BlenderLayerServer(QRunnable):
             if e.errno == errno.ECONNRESET or e.errno == errno.ECONNABORTED:
                 pass
             elif e.errno == errno.EADDRINUSE:
-                resultStr = i18n("Port occupied. Change it in settings")
+                resultStr = i18n("[EADDRINUSE] Port occupied. Change it in settings")
             else:
                 resultStr = str(e)
         except Exception as e:

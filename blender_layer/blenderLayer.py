@@ -91,10 +91,13 @@ class BlenderLayer(DockWidget):
         viewHBoxLayout = QHBoxLayout()
         viewLabel = QLabel(i18n("Mode")) 
         viewComboBox = QComboBox()
-        viewComboBox.addItems([i18n("Current view"), i18n("Camera"), i18n("Render result")])
+        viewComboBox.addItems([i18n("Current view"), i18n("Independent view"), i18n("Camera"), i18n("Render result"), i18n("UV Painting"), i18n("Projection Painting")])
         viewComboBox.setItemData(0, i18n("Show view as seen in the active 3D View"), QtCore.Qt.ToolTipRole)
-        viewComboBox.setItemData(1, i18n("Show view from the active camera"), QtCore.Qt.ToolTipRole)
-        viewComboBox.setItemData(2, i18n("Render and show result"), QtCore.Qt.ToolTipRole)
+        viewComboBox.setItemData(1, i18n("Show view from an independent angle"), QtCore.Qt.ToolTipRole)
+        viewComboBox.setItemData(2, i18n("Show view from the active camera"), QtCore.Qt.ToolTipRole)
+        viewComboBox.setItemData(3, i18n("Render and show result"), QtCore.Qt.ToolTipRole)
+        viewComboBox.setItemData(4, i18n("Live paint on a texture"), QtCore.Qt.ToolTipRole)
+        viewComboBox.setItemData(5, i18n("Live paint on a 3D Model"), QtCore.Qt.ToolTipRole)
         viewComboBox.setToolTip(i18n("Select view mode"))
 
         viewHBoxLayout.addWidget(viewLabel)
@@ -203,7 +206,7 @@ class BlenderLayer(DockWidget):
         gizmoCheck.setToolTip(i18n("Whether to show gizmos.\nDepends on the settings of the active 3D View"))
 
         shadingComboBox = QComboBox()
-        shadingComboBox.addItems([i18n("Wireframe"), i18n("Solid"), i18n("Material Preview"), i18n("Rendered")])
+        shadingComboBox.addItems([i18n("Wireframe"), i18n("Solid"), i18n("Flat Texture"), i18n("Material Preview"), i18n("Rendered")])
         shadingComboBox.setCurrentIndex(1)
 
         viewFormLayout = QFormLayout()
@@ -237,11 +240,12 @@ class BlenderLayer(DockWidget):
         updateHBoxLayout = QHBoxLayout()
         updateLabel = QLabel(i18n("Update mode")) 
         updateComboBox = QComboBox()
-        updateComboBox.addItems([i18n("Live"), i18n("Auto"), i18n("Manual")])
+        updateComboBox.addItems([i18n("Live"), i18n("Auto"), i18n("Auto (Update from Blender)"), i18n("Manual")])
         updateComboBox.setCurrentIndex(1)
         updateComboBox.setItemData(0, i18n("Periodically update even when Krita is not in focus"), QtCore.Qt.ToolTipRole)
-        updateComboBox.setItemData(1, i18n("Only update when settings change or Krita regains focus\n(Recommended)"), QtCore.Qt.ToolTipRole)
-        updateComboBox.setItemData(2, i18n("Only update when the update button is pressed\n(Recommended for large resolutions)"), QtCore.Qt.ToolTipRole)
+        updateComboBox.setItemData(1, i18n("Only update when settings change in Krita or Krita regains focus\n(Recommended)"), QtCore.Qt.ToolTipRole)
+        updateComboBox.setItemData(2, i18n("Only update when settings change in Blender or in Krita\n"), QtCore.Qt.ToolTipRole)
+        updateComboBox.setItemData(3, i18n("Only update when the update button is pressed\n(Recommended for large resolutions)"), QtCore.Qt.ToolTipRole)
         updateComboBox.setToolTip(i18n("Select when to update the view"))
        
         updateHBoxLayout.addWidget(updateLabel)
@@ -501,20 +505,19 @@ class BlenderLayer(DockWidget):
         self.uiContainer.setEnabled(canvas != None and instance.activeDocument() != None and instance.activeDocument().rootNode() != None)
           
     def eventFilter(self, source, event):
-        if event.type() == QEvent.MouseButtonPress and event.buttons() == Qt.MidButton and (event.modifiers() & Qt.AltModifier) == Qt.AltModifier and self.settings.navigateAlt and self.navigate and self.navigate.isEnabled() and self.settings.viewMode == 0:
+        if event.type() == QEvent.MouseButtonPress and event.buttons() == Qt.MidButton and (event.modifiers() & Qt.AltModifier) == Qt.AltModifier and self.settings.navigateAlt and self.navigate and self.navigate.isEnabled() and (self.settings.viewMode < 3 or  self.settings.viewMode == 5):
             self.navigate.mousePressEvent(event, True)
             return True
-        elif event.type() == QEvent.MouseMove and event.buttons() == Qt.MidButton and (event.modifiers() & Qt.AltModifier) == Qt.AltModifier and self.settings.navigateAlt and self.navigate and self.navigate.isEnabled() and self.settings.viewMode == 0:
+        elif event.type() == QEvent.MouseMove and event.buttons() == Qt.MidButton and (event.modifiers() & Qt.AltModifier) == Qt.AltModifier and self.settings.navigateAlt and self.navigate and self.navigate.isEnabled() and (self.settings.viewMode < 3 or  self.settings.viewMode == 5):
             self.navigate.mouseMoveEvent(event)
             return True
-        elif event.type() == QEvent.Wheel and (event.modifiers() & Qt.AltModifier) == Qt.AltModifier and self.settings.navigateAlt and self.navigate and self.navigate.isEnabled() and self.settings.viewMode == 0:
+        elif event.type() == QEvent.Wheel and (event.modifiers() & Qt.AltModifier) == Qt.AltModifier and self.settings.navigateAlt and self.navigate and self.navigate.isEnabled() and (self.settings.viewMode < 3 or  self.settings.viewMode == 5):
             self.navigate.wheelEvent(event)
             return True
         elif event.type() == QEvent.Drop and self.uiContainer.isEnabled() and event.mimeData().hasUrls() and any(u.toLocalFile().endswith('.blend') for u in event.mimeData().urls()):
             self.dropEvent(event)
-            self.setVisible(True)
             return True
-        elif type(source) == QMainWindow and event.type() == QEvent.WindowActivate and self.settings.updateMode == 1 and self.server and self.server.running:
+        elif type(source) == QMainWindow and event.type() == QEvent.WindowActivate and (self.settings.updateMode == 1 or self.settings.updateMode == 2) and self.server and self.server.running:
             self.server.sendMessage(('requestFrame', True))
         elif (event.type() == QEvent.ContextMenu and source is self.poseList):
             menu = QtWidgets.QMenu()
@@ -525,6 +528,36 @@ class BlenderLayer(DockWidget):
                 item = source.itemAt(event.pos())
                 self.applyPose(item, action == flipped)
             return True
+        elif type(source) == QOpenGLWidget and event.type() == QEvent.MouseMove and self.server and self.server.running and instance.activeDocument() == self.activeDocument and self.settings.viewMode == 4:
+            w = instance.activeWindow()
+            v = w.activeView()
+            c = v.canvas()
+            d = v.document()
+            w0 = w.qwindow().centralWidget().currentWidget().currentSubWindow().widget().layout().itemAtPosition(1, 1).widget()
+            pos = QPointF((event.pos().x() + w0.horizontalScrollBar().value()) / c.zoomLevel(), (event.pos().y() + w0.verticalScrollBar().value()) / c.zoomLevel())
+            r = -c.rotation()
+            w = d.width() * 72.0 / d.xRes()
+            h = d.height() * 72.0 / d.yRes()
+            if c.mirror():
+                pos = QPointF(w - pos.x(), pos.y())
+                r = -r
+            if r != 0:
+                xo = w * 0.5
+                xo1 = 0#w * self.navigate.rotation.x() / math.pi
+                yo = h * 0.5
+                xo1 = 0#h * self.navigate.rotation.y() / math.pi
+                pos = QTransform().translate(xo, yo).rotate(r).translate(-xo + xo1, -yo + yo1).map(pos)
+            pos = QPointF(pos.x() / w, pos.y() / h)
+            b = v.brushSize() * math.sqrt(2)
+            self.server.sendMessage(('cursor', pos.x(), 1.0 - pos.y(), b / d.width(), b / d.height()))
+        elif self.settings.viewMode == 5 and self.server and self.server.running and (event.type() == QEvent.Shortcut and event.key() == QKeySequence.Undo):
+            self.server.sendMessage(('undo', True))
+            return True
+        elif type(source) == QOpenGLWidget and (event.type() == QEvent.MouseButtonPress and event.buttons() == Qt.LeftButton or event.type() == QEvent.ShortcutOverride) and self.server and self.server.running:
+            if self.settings.viewMode == 4:
+                self.server.requestTextureDelayed(1)
+            elif self.settings.viewMode == 5:
+                self.server.requestTextureDelayed(2)
         return super().eventFilter(source, event)
 
     def setSettingsAndSend(self, attr, v):
@@ -835,7 +868,7 @@ class BlenderLayer(DockWidget):
                             break
             except e:
                 print(e)
-            
+                
             if not self.settings.blenderPath:
                 if dialog:
                     dialog = QFileDialog(self, i18n("Open blender executable"), QStandardPaths.writableLocation(QStandardPaths.ApplicationsLocation))
@@ -1215,7 +1248,10 @@ class BlenderLayer(DockWidget):
     def updateFrame(self):
         if not self.isLayoutEnabled(self.updateButtonLayout):
             return
-        self.server.sendMessage(('requestFrame', True))
+        if self.settings.viewMode > 3:
+            self.server.requestTexture = 2 if self.settings.viewMode == 5 else 1
+        else:
+            self.server.sendMessage(('requestFrame', True))
         
     def updateAnimation(self, render = False):
         if not self.isLayoutEnabled(self.renderButtonLayout if render else self.updateButtonLayout):
@@ -1414,12 +1450,12 @@ class BlenderLayer(DockWidget):
         self.settings.viewMode = index
         if self.server and self.server.running and not fromClient:
             self.server.sendMessage(('viewMode', index))
-        self.setLayoutVisible(self.updateLayout, index < 2)
-        self.viewGroup.setVisible(index < 2)
-        self.updateGroup.setVisible(index < 2)
-        self.libraryGroup.setVisible(index < 2)
-        self.renderGroup.setVisible(index == 2)
-        self.setLayoutVisible(self.currentViewLayout, index == 0)
+        self.setLayoutVisible(self.updateLayout, index != 3)
+        self.viewGroup.setVisible(index < 3 or index == 5)
+        self.updateGroup.setVisible(index != 3)
+        self.libraryGroup.setVisible(index < 3)
+        self.renderGroup.setVisible(index == 3)
+        self.setLayoutVisible(self.currentViewLayout, index < 2 or index == 5)
             
     def updateModeChanged(self, index, fromClient = False):
         self.settings.updateMode = index
@@ -1433,7 +1469,7 @@ class BlenderLayer(DockWidget):
         self.updateRate.setVisible(index == 0)
         self.updateRateLabel.setVisible(index == 0)
         self.updateSeperator.setVisible(index != 0)
-        self.manualWarning.setVisible(index == 2)
+        self.manualWarning.setVisible(index == 3)
         self.setLayoutVisible(self.updateButtonLayout, index != 0)
             
     def setLayoutVisible(self, layout, visible):
