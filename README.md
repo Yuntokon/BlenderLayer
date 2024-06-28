@@ -1,4 +1,8 @@
 # Blender Layer
+See Krita Artists [post](https://krita-artists.org/t/plugin-blender-layer-live-3d-view-in-krita/63394) for more info.
+
+This is intended for 2d artist who want to use 3d models as reference in krita. Some features for 3d artist, i.e. texture painting, might be added in the future (Proof of concept in dev branch)
+
 ## Getting Started
  - Install Blender
  - Make sure the 'Blender Layer' add-on is installed and enabled in Krita
