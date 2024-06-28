@@ -1,7 +1,7 @@
-import sys, math, threading
+import sys, math, threading, os
 from krita import *
 
-from PyQt5.QtCore import Qt, QThreadPool
+from PyQt5.QtCore import Qt, QThreadPool, QPoint
 from os import path
 from functools import partial
 from types import SimpleNamespace
@@ -41,17 +41,21 @@ class BlenderLayer(DockWidget):
         self.settings.lensZoom = True
         self.settings.engine = ''
         self.settings.shading = 1
+        self.settings.textures = []
+        self.settings.documentTextureMap = {}
 
         self.readSettings()
         self.createdActions = False
         self.lastStatus = None
+        self.blenderArgs = None
+        self.currentPort = -1
         self.blenderRunning = False
         self.connected = False
         self.server = None
         self.activeInFile = None
         self.activeDocument = None
         self.blockServerSignal = False
-        self.setWindowTitle(i18n("Blender Layer"))
+        self.setWindowTitle(i18n("Blender Layer Dev"))
 
         scrollContainer = QWidget()
         scroll = QScrollArea()
@@ -71,7 +75,7 @@ class BlenderLayer(DockWidget):
         settingsButton.setToolTip(i18n("Settings"))
         settingsHBoxLayout.addWidget(settingsButton)
         
-        connectionGroupBox = QGroupBox(i18n("Connect"))
+        connectionGroupBox = QGroupBox()
         connectionVBoxLayout = QVBoxLayout()
         connectionHBoxLayout = QHBoxLayout()
         startstopButton = QPushButton(i18n("Start Server"))
@@ -91,7 +95,7 @@ class BlenderLayer(DockWidget):
         viewHBoxLayout = QHBoxLayout()
         viewLabel = QLabel(i18n("Mode")) 
         viewComboBox = QComboBox()
-        viewComboBox.addItems([i18n("Current view"), i18n("Independent view"), i18n("Camera"), i18n("Render result"), i18n("UV Painting"), i18n("Projection Painting")])
+        viewComboBox.addItems([i18n("Current view"), i18n("Independent view"), i18n("Camera"), i18n("Render result"), i18n("UV painting"), i18n("Projection painting")])
         viewComboBox.setItemData(0, i18n("Show view as seen in the active 3D View"), QtCore.Qt.ToolTipRole)
         viewComboBox.setItemData(1, i18n("Show view from an independent angle"), QtCore.Qt.ToolTipRole)
         viewComboBox.setItemData(2, i18n("Show view from the active camera"), QtCore.Qt.ToolTipRole)
@@ -103,7 +107,7 @@ class BlenderLayer(DockWidget):
         viewHBoxLayout.addWidget(viewLabel)
         viewHBoxLayout.addWidget(viewComboBox)
         
-        renderGroupBox = QGroupBox(i18n("Render"))
+        renderGroupBox = QGroupBox()
         renderVBoxLayout = QVBoxLayout()
         
         renderCurrentViewCheck = QCheckBox(i18n("Render from current view"))
@@ -152,6 +156,98 @@ class BlenderLayer(DockWidget):
         renderVBoxLayout.addLayout(renderHBoxLayout)
         renderGroupBox.setLayout(renderVBoxLayout)
         
+        projGroupBox = QGroupBox()
+        projVBoxLayout = QVBoxLayout()
+        
+        undoCheck = QCheckBox(i18n("Capture and forward undo"))
+        undoCheck.setToolTip(i18n("When pressing undo inside of Krita, undo in Blender instead"))
+        undoCheck.setChecked(True)
+
+        falloffCheck = QCheckBox(i18n("Normal falloff"))
+        falloffCheck.setToolTip(i18n("Paint most on faces pointing towards the view according to this angle"))
+        falloffCheck.setChecked(True)
+        
+        falloffAngleLayout = QHBoxLayout()
+
+        angleLabel = QLabel(i18n("Angle")) 
+        angleSlider = QSlider(Qt.Horizontal)
+        angleSlider.setRange(0, 90)
+        angleSlider.setValue(80)
+        angleSpinBox = QSpinBox()
+        angleSpinBox.setRange(0, 90)
+        angleSpinBox.setValue(80)
+        angleSpinBox.setSuffix(i18n("°"))
+        angleSlider.valueChanged.connect(angleSpinBox.setValue)
+        angleSpinBox.valueChanged.connect(angleSlider.setValue)
+        
+        falloffAngleLayout.addWidget(angleLabel)
+        falloffAngleLayout.addWidget(angleSlider)
+        falloffAngleLayout.addWidget(angleSpinBox)
+
+        occludeCheck = QCheckBox(i18n("Occlude"))
+        occludeCheck.setToolTip(i18n("Only paint onto the faces directly under the brush"))
+        occludeCheck.setChecked(True)
+        
+        backFaceCheck = QCheckBox(i18n("Backface culling"))
+        backFaceCheck.setToolTip(i18n("Ignore faces pointing away from the viewer"))
+        backFaceCheck.setChecked(True)
+        
+        bleedLayout = QHBoxLayout()
+
+        bleedLabel = QLabel(i18n("Bleed")) 
+        bleedSlider = QSlider(Qt.Horizontal)
+        bleedSlider.setRange(0, 8)
+        bleedSlider.setValue(2)
+        bleedSpinBox = QSpinBox()
+        bleedSpinBox.setRange(0, 8)
+        bleedSpinBox.setValue(2)
+        bleedSpinBox.setSuffix(i18n("px"))
+        bleedSlider.valueChanged.connect(bleedSpinBox.setValue)
+        bleedSpinBox.valueChanged.connect(bleedSlider.setValue)
+        
+        bleedLayout.addWidget(bleedLabel)
+        bleedLayout.addWidget(bleedSlider)
+        bleedLayout.addWidget(bleedSpinBox)
+        
+        projVBoxLayout.addWidget(undoCheck)
+        projVBoxLayout.addWidget(falloffCheck)
+        projVBoxLayout.addLayout(falloffAngleLayout)
+        projVBoxLayout.addWidget(occludeCheck)
+        projVBoxLayout.addWidget(backFaceCheck)
+        projVBoxLayout.addLayout(bleedLayout)
+
+        projGroupBox.setLayout(projVBoxLayout)
+
+        uvGroupBox = QGroupBox()
+        uvVBoxLayout = QVBoxLayout()
+        
+        textureLabel = QLabel(i18n("Texture")) 
+        textureComboBox = QComboBox()
+        textureComboBox.addItems([i18n("<None>"), i18n("<New>")])
+        textureComboBox.setMinimumWidth(100)
+        textureComboBox.setToolTip(i18n("The Blender texture to edit.\nThis can be set per document"))
+
+        textureHBoxLayout = QHBoxLayout()
+        textureHBoxLayout.addWidget(textureLabel)
+        textureHBoxLayout.addWidget(textureComboBox)
+        
+        cursorCheck = QCheckBox(i18n("Show cursor on model (Experimental)"))
+        cursorCheck.setChecked(True)
+        cursorCheck.setToolTip(i18n("Shows the approximate location of Krita's cursor on the model in Blender"))
+
+        lineUV = QFrame()
+        lineUV.setFrameShape(QFrame.HLine)
+        lineUV.setFrameShadow(QFrame.Sunken)
+        
+        uvLayoutButton = QPushButton(i18n("Import UV layout"))
+
+        uvVBoxLayout.addLayout(textureHBoxLayout)
+        uvVBoxLayout.addWidget(cursorCheck)
+        uvVBoxLayout.addWidget(lineUV)
+        uvVBoxLayout.addWidget(uvLayoutButton)
+
+        uvGroupBox.setLayout(uvVBoxLayout)
+
         viewGroupBox = QGroupBox(i18n("View"))
         viewVBoxLayout = QVBoxLayout()
         currentViewVBoxLayout = QVBoxLayout()
@@ -221,7 +317,17 @@ class BlenderLayer(DockWidget):
         line2 = QFrame()
         line2.setFrameShape(QFrame.HLine)
         line2.setFrameShadow(QFrame.Sunken)
-        
+             
+        createCameraButton = QPushButton(i18n("Create Camera"))
+        createCameraButton.setToolTip(i18n("Create a new Blender camera from the current view"))
+
+        moveToCameraButton = QPushButton(i18n("Move to Camera"))
+        moveToCameraButton.setToolTip(i18n("Set current view to a Blender camera"))
+
+        cameraHBoxLayout = QHBoxLayout()
+        cameraHBoxLayout.addWidget(createCameraButton)
+        cameraHBoxLayout.addWidget(moveToCameraButton)
+
         assistantsButton = QPushButton(i18n("Create Assistant Set"))
         assistantsButton.setToolTip(i18n("Create drawing assistants matching the current view.\nThis will create an xml file which has to be loaded from the tool settings of the assistants tool.\n(Tool Settings → Load Assistant Set Button)"))
 
@@ -234,8 +340,29 @@ class BlenderLayer(DockWidget):
         viewVBoxLayout.addLayout(viewFormLayout)
         viewVBoxLayout.addWidget(manualWarning)
         viewVBoxLayout.addWidget(line2)
+        viewVBoxLayout.addLayout(cameraHBoxLayout)
         viewVBoxLayout.addWidget(assistantsButton)
         viewGroupBox.setLayout(viewVBoxLayout)
+
+        texUpdateHBoxLayout = QHBoxLayout()
+        texUpdateLabel = QLabel(i18n("Texture update mode")) 
+        texUpdateComboBox = QComboBox()
+        texUpdateComboBox.addItems([i18n("Auto"), i18n("Manual")])
+        texUpdateComboBox.setCurrentIndex(0)
+        texUpdateComboBox.setItemData(0, i18n("Update after each stroke"), QtCore.Qt.ToolTipRole)
+        texUpdateComboBox.setItemData(1, i18n("Only update when the update button is pressed\n(Recommended for large resolutions)"), QtCore.Qt.ToolTipRole)
+        texUpdateComboBox.setToolTip(i18n("Select when to update the texture"))
+
+        texUpdateHBoxLayout.addWidget(texUpdateLabel)
+        texUpdateHBoxLayout.addWidget(texUpdateComboBox)
+
+        texUpdateGroupBox = QGroupBox()
+        texUpdateVBoxLayout = QVBoxLayout()
+        
+        texUpdateButton = QPushButton(i18n("Update"))  
+
+        texUpdateVBoxLayout.addWidget(texUpdateButton)
+        texUpdateGroupBox.setLayout(texUpdateVBoxLayout)
 
         updateHBoxLayout = QHBoxLayout()
         updateLabel = QLabel(i18n("Update mode")) 
@@ -251,7 +378,7 @@ class BlenderLayer(DockWidget):
         updateHBoxLayout.addWidget(updateLabel)
         updateHBoxLayout.addWidget(updateComboBox)
 
-        updateGroupBox = QGroupBox(i18n("Update"))
+        updateGroupBox = QGroupBox()
         updateVBoxLayout = QVBoxLayout()
         
         updateForm = QFormLayout()
@@ -374,7 +501,11 @@ class BlenderLayer(DockWidget):
         vboxlayout.addWidget(connectionGroupBox)
         vboxlayout.addLayout(viewHBoxLayout)
         vboxlayout.addWidget(renderGroupBox)
+        vboxlayout.addWidget(projGroupBox)
+        vboxlayout.addWidget(uvGroupBox)
         vboxlayout.addWidget(viewGroupBox)
+        vboxlayout.addLayout(texUpdateHBoxLayout)
+        vboxlayout.addWidget(texUpdateGroupBox)
         vboxlayout.addLayout(updateHBoxLayout)
         vboxlayout.addWidget(updateGroupBox)
         vboxlayout.addWidget(regionCheck)
@@ -390,6 +521,8 @@ class BlenderLayer(DockWidget):
         self.startstop = startstopButton
         self.startBlenderButton = startBlenderButton
         self.statusBar = statusBar
+        self.projGroup = projGroupBox
+        self.uvGroup = uvGroupBox
         self.renderGroup = renderGroupBox
         self.renderOverride = renderOverrideCheck
         self.renderOverridePath = renderPathCheck
@@ -400,6 +533,8 @@ class BlenderLayer(DockWidget):
         self.view = viewComboBox
         self.viewGroup = viewGroupBox
         self.currentViewLayout = currentViewVBoxLayout
+        self.cameraLayout = cameraHBoxLayout
+        self.moveToCamera = moveToCameraButton
         self.navigate = navigateWidget
         self.roll = rollSpinBox
         self.lens = lensSpinBox
@@ -407,6 +542,9 @@ class BlenderLayer(DockWidget):
         self.shading = shadingComboBox
         self.cyclesWarning = cyclesWarning
         self.manualWarning = manualWarning
+        self.texUpdateLayout = texUpdateHBoxLayout
+        self.texUpdateGroup = texUpdateGroupBox
+        self.textures = textureComboBox
         self.update = updateComboBox
         self.updateLayout = updateHBoxLayout
         self.updateGroup = updateGroupBox
@@ -417,7 +555,9 @@ class BlenderLayer(DockWidget):
         self.updateForm = updateForm
         self.updateSeperator = line3
         self.updateButtonLayout = updateButtonsHBoxLayout
+        self.textureUpdate = texUpdateButton
         self.regionGroup = regionGroupBox
+        self.region = regionCheck
         self.regionX = regionXSpinBox
         self.regionY = regionYSpinBox
         self.regionWidth  = regionWidthSpinBox
@@ -436,15 +576,30 @@ class BlenderLayer(DockWidget):
         startstopButton.clicked.connect(self.startStopServer)    
         startBlenderButton.clicked.connect(self.startBlender)
         assistantsButton.clicked.connect(self.createAssistants)
+        createCameraButton.clicked.connect(self.requestCreateCamera)
+        moveToCameraButton.clicked.connect(lambda: self.server.sendMessage(('cameraList', 'moveToCamera')))
         regionSelectionButton.clicked.connect(self.regionFromSelection)
         updateButton.clicked.connect(self.updateFrame)
         updateAnimButton.clicked.connect(self.updateAnimation)
+        texUpdateButton.clicked.connect(self.updateTexture)
 
         renderButton.clicked.connect(self.render)
         renderAnimationButton.clicked.connect(partial(self.updateAnimation, True))
 
         renderOverrideCheck.toggled.connect(partial(self.setLayoutVisible, renderOverrideVBoxLayout))
         renderCurrentViewCheck.toggled.connect(partial(self.setSettingsAndSend, 'renderCurrentView'))
+
+        cursorCheck.toggled.connect(partial(self.setSettingsAndSend, 'uvCursor'))
+        uvLayoutButton.clicked.connect(self.requestUVLayout)
+
+        falloffCheck.toggled.connect(lambda b: self.sendBlockableMessage(('falloff', b)))
+        falloffCheck.toggled.connect(partial(self.setLayoutVisible, falloffAngleLayout))
+        angleSpinBox.valueChanged.connect(lambda v: self.sendBlockableMessage(('falloffAngle', v)))
+        occludeCheck.toggled.connect(lambda b: self.sendBlockableMessage(('occlude', b)))
+        backFaceCheck.toggled.connect(lambda b: self.sendBlockableMessage(('backface', b)))
+        bleedSpinBox.valueChanged.connect(lambda v: self.sendBlockableMessage(('bleed', v)))
+
+        textureComboBox.currentIndexChanged.connect(self.textureChanged)
 
         poseList.itemDoubleClicked.connect(self.applyPose)
         poseList.horizontalScrollBar().valueChanged.connect(self.requestPosePreviews)
@@ -479,8 +634,12 @@ class BlenderLayer(DockWidget):
 
         self.setLayoutEnabled(self.updateButtonLayout, False)
         self.setLayoutEnabled(self.renderButtonLayout, False)
+        self.textureUpdate.setEnabled(False)
         libraryGroupBox.setEnabled(False)
         viewGroupBox.setEnabled(False)
+        projGroupBox.setEnabled(False)
+        uvGroupBox.setEnabled(False)
+
         self.updatePoseLibrary([], True)
         self.updateLibraryObjects()
         self.updateModeChanged(1)
@@ -500,6 +659,8 @@ class BlenderLayer(DockWidget):
             window.createAction('blender_layer_render').triggered.connect(self.render)
             window.createAction('blender_layer_update_animation').triggered.connect(self.updateAnimation)
             window.createAction('blender_layer_render_animation').triggered.connect(partial(self.updateAnimation, True))
+            window.createAction('blender_layer_update_texture').triggered.connect(self.updateTexture)
+
 
     def canvasChanged(self, canvas):
         self.uiContainer.setEnabled(canvas != None and instance.activeDocument() != None and instance.activeDocument().rootNode() != None)
@@ -528,30 +689,37 @@ class BlenderLayer(DockWidget):
                 item = source.itemAt(event.pos())
                 self.applyPose(item, action == flipped)
             return True
-        elif type(source) == QOpenGLWidget and event.type() == QEvent.MouseMove and self.server and self.server.running and instance.activeDocument() == self.activeDocument and self.settings.viewMode == 4:
-            w = instance.activeWindow()
-            v = w.activeView()
-            c = v.canvas()
-            d = v.document()
-            w0 = w.qwindow().centralWidget().currentWidget().currentSubWindow().widget().layout().itemAtPosition(1, 1).widget()
-            pos = QPointF((event.pos().x() + w0.horizontalScrollBar().value()) / c.zoomLevel(), (event.pos().y() + w0.verticalScrollBar().value()) / c.zoomLevel())
-            r = -c.rotation()
-            w = d.width() * 72.0 / d.xRes()
-            h = d.height() * 72.0 / d.yRes()
-            if c.mirror():
-                pos = QPointF(w - pos.x(), pos.y())
-                r = -r
-            if r != 0:
-                xo = w * 0.5
-                xo1 = 0#w * self.navigate.rotation.x() / math.pi
-                yo = h * 0.5
-                xo1 = 0#h * self.navigate.rotation.y() / math.pi
-                pos = QTransform().translate(xo, yo).rotate(r).translate(-xo + xo1, -yo + yo1).map(pos)
-            pos = QPointF(pos.x() / w, pos.y() / h)
-            b = v.brushSize() * math.sqrt(2)
-            self.server.sendMessage(('cursor', pos.x(), 1.0 - pos.y(), b / d.width(), b / d.height()))
+        elif type(source) == QOpenGLWidget and (event.type() == QEvent.MouseMove or event.type() == QEvent.Leave) and self.server and self.server.running and instance.activeDocument() == self.activeDocument and self.settings.viewMode == 4 and self.settings.uvCursor:
+            if event.type() == QEvent.MouseMove:
+                w = instance.activeWindow()
+                v = w.activeView()
+                c = v.canvas()
+                d = v.document()
+                w0 = w.qwindow().centralWidget().currentWidget().currentSubWindow().widget().layout().itemAtPosition(1, 1).widget()
+                pos = QPointF((event.pos().x() + w0.horizontalScrollBar().value()) / c.zoomLevel(), (event.pos().y() + w0.verticalScrollBar().value()) / c.zoomLevel())
+                r = -c.rotation()
+                w = d.width() * 72.0 / d.xRes()
+                h = d.height() * 72.0 / d.yRes()
+                if c.mirror():
+                    pos = QPointF(w - pos.x(), pos.y())
+                    r = -r
+                if r != 0:
+                    xo = w * 0.5
+                    xo1 = 0#w * self.navigate.rotation.x() / math.pi
+                    yo = h * 0.5
+                    yo1 = 0#h * self.navigate.rotation.y() / math.pi
+                    pos = QTransform().translate(xo, yo).rotate(r).translate(-xo + xo1, -yo + yo1).map(pos)
+                pos = QPointF(pos.x() / w, pos.y() / h)
+                b = v.brushSize() * 2
+                self.server.sendMessage(('cursor', pos.x(), 1.0 - pos.y(), b / d.width(), b / d.height()))
+            else:
+                self.server.sendMessage(('cursor', -1, -1, -1, -1))
+
         elif self.settings.viewMode == 5 and self.server and self.server.running and (event.type() == QEvent.Shortcut and event.key() == QKeySequence.Undo):
             self.server.sendMessage(('undo', True))
+            return True
+        elif self.settings.viewMode == 5 and self.server and self.server.running and (event.type() == QEvent.Shortcut and event.key() == QKeySequence.Redo):
+            self.server.sendMessage(('redo', True))
             return True
         elif type(source) == QOpenGLWidget and (event.type() == QEvent.MouseButtonPress and event.buttons() == Qt.LeftButton or event.type() == QEvent.ShortcutOverride) and self.server and self.server.running:
             if self.settings.viewMode == 4:
@@ -642,6 +810,16 @@ class BlenderLayer(DockWidget):
         layerNameInput.textEdited.connect(lambda s: setattr(self.settings, 'layerName', s))
         layerNameInput.setToolTip(i18n("Name of the layer which shows the view from Blender"))
 
+        projLayerNameInput = QLineEdit()
+        projLayerNameInput.setText(self.settings.projLayerName)
+        projLayerNameInput.textEdited.connect(lambda s: setattr(self.settings, 'projLayerName', s))
+        projLayerNameInput.setToolTip(i18n("Name of the layer which gets projected onto the model"))
+
+        uvLayerNameInput = QLineEdit()
+        uvLayerNameInput.setText(self.settings.uvLayerName)
+        uvLayerNameInput.textEdited.connect(lambda s: setattr(self.settings, 'uvLayerName', s))
+        uvLayerNameInput.setToolTip(i18n("Name of the uv layout reference layer"))
+
         relPathCheckBox = QCheckBox(i18n("Use relative paths for .blend files"))
         relPathCheckBox.setChecked(self.settings.relPath)
         relPathCheckBox.toggled.connect(lambda v: setattr(self.settings, 'relPath', v))
@@ -656,6 +834,8 @@ class BlenderLayer(DockWidget):
         form.addRow(i18n("Blender location:"), blenderPathHBoxLayout)
         form.addRow(i18n("Render location:"), renderPathHBoxLayout)
         form.addRow(i18n("Layer name"), layerNameInput)
+        form.addRow(i18n("Projection layer name"), projLayerNameInput)
+        form.addRow(i18n("UV Layout layer name"), uvLayerNameInput)
         form.addRow(relPathCheckBox)
         form.addRow(navigateAltCheckBox)
 
@@ -694,7 +874,7 @@ class BlenderLayer(DockWidget):
                     libraryTable.setItem(row, 2, QTableWidgetItem(''))
                     row = row + 1
 
-        creditLabel = QLabel("Body-chan models CC-0 by " + '<a href=\"https://blendswap.com/blend/23521\">vinchau</a>')
+        creditLabel = QLabel(i18n("Body-chan models CC-0 by ") + '<a href=\"https://blendswap.com/blend/23521\">vinchau</a>')
         creditLabel.setTextInteractionFlags(Qt.TextBrowserInteraction);
         creditLabel.setOpenExternalLinks(True);
         addButton = QToolButton()
@@ -726,9 +906,21 @@ class BlenderLayer(DockWidget):
         portSpinBox.setValue(self.settings.port)
         portSpinBox.valueChanged.connect(lambda v: setattr(self.settings, 'port', v))
         
+        portTriesSpinBox = QSpinBox()
+        portTriesSpinBox.setRange(1, 256)
+        portTriesSpinBox.setValue(self.settings.portTries)
+        portTriesSpinBox.setToolTip(i18n("When the port is occupied, increasing port and retry"))
+        portTriesSpinBox.valueChanged.connect(lambda v: setattr(self.settings, 'portTries', v))
+
         hostInput = QLineEdit()
         hostInput.setText(self.settings.host)
         hostInput.textEdited.connect(lambda s: setattr(self.settings, 'host', s))
+        
+        timeoutSpinBox = QDoubleSpinBox()
+        timeoutSpinBox.setRange(0, 30)
+        timeoutSpinBox.setSuffix("s")
+        timeoutSpinBox.setValue(self.settings.timeout)
+        timeoutSpinBox.valueChanged.connect(lambda v: setattr(self.settings, 'timeout', v))
         
         sharedMemCheckBox = QCheckBox(i18n("Use shared memory buffer"))
         sharedMemCheckBox.setChecked(self.settings.sharedMem)
@@ -738,24 +930,44 @@ class BlenderLayer(DockWidget):
         connectionForm = QFormLayout()
         connectionForm.addRow(i18n("Host:"), hostInput)
         connectionForm.addRow(i18n("Port:"), portSpinBox)
+        connectionForm.addRow(i18n("Try alternate ports:"), portTriesSpinBox)
+        connectionForm.addRow(i18n("Timeout after:"), timeoutSpinBox)
         connectionForm.addRow(sharedMemCheckBox)
         connectionGroupBox.setLayout(connectionForm)
         
         assistantsGroupBox = QGroupBox(i18n("Assistants"))
 
-        threePointCheckBox = QCheckBox(i18n("3 Point Perspective"))
+        threePointCheckBox = QCheckBox(i18n("3 point perspective"))
         threePointCheckBox.setChecked(self.settings.assistantsThreePoint)
         threePointCheckBox.setToolTip(i18n("Include a third vanishing point in the assistant set"))
         threePointCheckBox.toggled.connect(lambda v: setattr(self.settings, 'assistantsThreePoint', v))
 
-        axisCheckBox = QCheckBox(i18n("Colored Axis"))
+        axisCheckBox = QCheckBox(i18n("Colored axis"))
         axisCheckBox.setChecked(self.settings.assistantsAxis)
         axisCheckBox.setToolTip(i18n("Include colored lines representing the axis in the assistant set"))
         axisCheckBox.toggled.connect(lambda v: setattr(self.settings, 'assistantsAxis', v))
 
+        regionCheckBox = QCheckBox(i18n("Limit to image region"))
+        regionCheckBox.setChecked(self.settings.assistantsRegion)
+        regionCheckBox.setToolTip(i18n("When the view is limited to a region, also limit assistants"))
+        regionCheckBox.toggled.connect(lambda v: setattr(self.settings, 'assistantsRegion', v))
+
+        cursorColorLabel = QLabel(i18n("Blender cursor color"))
+        curorColorInput = QLineEdit()
+        curorColorInput.setText(self.settings.cursorColor)
+        curorColorInput.textEdited.connect(lambda s: setattr(self.settings, 'cursorColor', s))
+        curorColorInput.setToolTip(i18n("Color of the UV painting cursor in Blender"))
+
+        cursorHBox = QHBoxLayout()
+        cursorHBox.addWidget(cursorColorLabel)
+        cursorHBox.addWidget(curorColorInput)
+
         assistantsVBox = QVBoxLayout()
         assistantsVBox.addWidget(threePointCheckBox)
         assistantsVBox.addWidget(axisCheckBox)
+        assistantsVBox.addWidget(regionCheckBox)
+        assistantsVBox.addLayout(cursorHBox)
+        assistantsVBox.addLayout(cursorHBox)
         assistantsGroupBox.setLayout(assistantsVBox)
         
         colorManagementGroupBox = QGroupBox(i18n("Color Management"))
@@ -839,6 +1051,10 @@ class BlenderLayer(DockWidget):
         self.updateLibraryObjects()
         self.settingsButton.setEnabled(True)
 
+    def onError(self, message):
+        print(message)
+        self.setStatus(message)
+
     def setStatus(self, message):
         if message == self.lastStatus:
             self.statusRepeated = self.statusRepeated + 1
@@ -889,7 +1105,7 @@ class BlenderLayer(DockWidget):
             
         self.determineBlenderPath()   
         if self.settings.blenderPath:
-            args = [self.settings.blenderPath, '--python', str(path.abspath(os.path.join(os.path.dirname(__file__), 'blenderLayerClient.py'))), '--', '--connect-to-krita', str(self.settings.host), str(self.settings.port)]
+            args = [self.settings.blenderPath, '--python', str(path.abspath(os.path.join(os.path.dirname(__file__), 'blenderLayerClient.py'))), '--', '--connect-to-krita', str(self.settings.host), str(self.settings.port), str(self.settings.timeout)]
             
             if self.activeInFile == None:
                 self.activeInFile = instance.activeDocument().fileName()
@@ -898,17 +1114,26 @@ class BlenderLayer(DockWidget):
                 file = self.getFilenameFromLayer()                    
             if file and os.path.isfile(file):
                 args.insert(1, file)
-            runnable = BlenderRunnable(args)
+
+            self.blenderArgs = args    
+            if (not self.server) or (not self.server.running):
+                self.startStopServer()
+            elif self.currentPort != -1:  
+                self.runBlenderOnPort(self.currentPort)
+                
+    def runBlenderOnPort(self, port):
+        self.currentPort = port
+        if self.blenderArgs:
+            self.blenderArgs[-2] = str(port)
+            runnable = BlenderRunnable(self.blenderArgs)
             runnable.signals.finished.connect(self.onBlenderStopped)
             
             self.blenderRunning = True
             self.startBlenderButton.setEnabled(False)
             self.startBlenderButton.setText(i18n("Blender running..."))   
 
-            if (not self.server) or (not self.server.running):
-                self.startStopServer()
-                
             QThreadPool.globalInstance().start(runnable)
+            self.blenderArgs = None
             
     def onBlenderStopped(self, result):
         if result:
@@ -916,7 +1141,7 @@ class BlenderLayer(DockWidget):
         self.blenderRunning = False
         self.startBlenderButton.setEnabled(True)
         self.startBlenderButton.setText(i18n("Start Blender"))
-            
+                    
     def startStopServer(self):
         if self.server and self.server.running:
             self.server.running = False
@@ -926,9 +1151,10 @@ class BlenderLayer(DockWidget):
             self.activeDocument = None
         elif instance.activeDocument():
             self.server = BlenderLayerServer(self.settings)
+            self.server.signals.portFound.connect(self.runBlenderOnPort)
             self.server.signals.finished.connect(self.onServerStopped)
             self.server.signals.connected.connect(self.onServerConnected)
-            self.server.signals.error.connect(self.setStatus)
+            self.server.signals.error.connect(self.onError)
             self.server.signals.msgReceived.connect(self.handleMessage)
             self.activeDocument = instance.activeDocument()
             self.activeInFile = self.activeDocument.fileName()
@@ -938,6 +1164,7 @@ class BlenderLayer(DockWidget):
             self.setStatus(i18n("Waiting for Blender..."))
 
     def onServerStopped(self, result):
+        self.currentPort = -1
         self.onServerConnected(False, None)
         self.startstop.setEnabled(True)
         self.startstop.setText(i18n("Start Server"))
@@ -950,9 +1177,12 @@ class BlenderLayer(DockWidget):
         
     def onServerConnected(self, connected, info):
         self.viewGroup.setEnabled(connected)
+        self.uvGroup.setEnabled(connected)
+        self.projGroup.setEnabled(connected)
         self.libraryGroup.setEnabled(connected)
         self.setLayoutEnabled(self.updateButtonLayout, connected)
         self.setLayoutEnabled(self.renderButtonLayout, connected)
+        self.textureUpdate.setEnabled(connected)
         if connected:
             self.startBlenderButton.setEnabled(False)
             self.startBlenderButton.setText(i18n("Connected")) 
@@ -989,6 +1219,16 @@ class BlenderLayer(DockWidget):
         elif type == 'posePreviews':
             for (name, pixels) in msg[1]:
                 self.loadPosePreview(name, pixels)
+        elif type == 'cameraList':
+            menu = QtWidgets.QMenu()
+            for cam in msg[1]:
+                a = menu.addAction(cam)
+                a.setIcon(QIcon())
+                a.setIconVisibleInMenu(False)
+            menu.setMinimumWidth(self.moveToCamera.width())
+            action = menu.exec_(self.moveToCamera.mapToGlobal(QPoint(0, 0)))
+            if action:
+                self.server.sendMessage(('moveToCamera', action.text()))
         elif type == 'rotate':
             self.blockServerSignal = True
             self.navigate.setRotation(msg[1], msg[2])
@@ -1008,6 +1248,22 @@ class BlenderLayer(DockWidget):
             self.blockServerSignal = False
         elif type == 'assistants':      
             self.writeAssistants(msg)
+        elif type == 'uvLayout':      
+            self.importUVLayout(msg)
+        elif type == 'region':  
+            self.resetRegion(msg[1])
+            if (msg[1]):
+                self.regionX.setValue(msg[2])
+                self.regionY.setValue(msg[3])
+                self.regionWidth.setValue(msg[4])
+                self.regionHeight.setValue(msg[5])
+                self.regionViewport.setChecked(msg[6])
+            self.regionChanged()
+        elif type == 'textures':       
+            self.textures.clear()
+            self.textures.addItems([i18n("<None>"), i18n("<New>")])
+            self.textures.addItems([n for (n, f) in msg[1]])
+            self.settings.textures = msg[1]
         elif type == 'file':
             file = msg[1]
             self.setStatus(i18n("Successfully connected")+ '<br/>'+os.path.basename(file))
@@ -1015,7 +1271,7 @@ class BlenderLayer(DockWidget):
         elif type == 'engine':
             self.updateCyclesWarning(msg[1], self.settings.shading)
         elif type == 'updateProgress':
-            self.update.setCurrentIndex(2)
+            self.update.setCurrentIndex(3)
             self.setStatus(i18n("Updated animation frame"))
             inProgress = msg[1] < msg[3]
             self.progress.setVisible(inProgress)
@@ -1024,8 +1280,8 @@ class BlenderLayer(DockWidget):
             self.progress.setRange(msg[2], msg[3])
             self.progress.setValue(msg[1])
         elif type == 'renderProgress':
-            self.view.setCurrentIndex(2)
-            self.update.setCurrentIndex(2)
+            self.view.setCurrentIndex(3)
+            self.update.setCurrentIndex(3)
             self.setStatus(i18n("Updated from render result"))
             inProgress = msg[1] < msg[3]
             self.progress.setVisible(inProgress)
@@ -1054,6 +1310,11 @@ class BlenderLayer(DockWidget):
         fileName = msg[1]
         third = self.settings.assistantsThreePoint
         axis = self.settings.assistantsAxis
+        region = self.settings.assistantsRegion and self.region.isChecked()
+
+        d = self.activeDocument if self.activeDocument else instance.activeDocument()
+        scaleX = 1.0 / d.xRes() * 72.0
+        scaleY = 1.0  / d.yRes() * 72.0
 
         handleLength = 5
         #vanishing points
@@ -1098,30 +1359,35 @@ class BlenderLayer(DockWidget):
             v2zx = cx + (cx - vzx) * 100
             v2zy = cy + (cy - vzy) * 100
         
+        local = '1' if region else '0'
+        regionHandles = '<handle ref="10"/><handle ref="11"/>' if region else ''
+        
         file = open(fileName,'w')
         file.write('<?xml version="1.0" encoding="UTF-8"?><paintingassistant color="176,176,176,255">')
-        file.write('<handles><handle id="0" x="{0}" y="{1}"/><handle id="1" x="{2}" y="{3}"/><handle id="2" x="{4}" y="{5}"/><handle id="3" x="{4}" y="{5}"/><handle id="4" x="{0}" y="{1}"/><handle id="5" x="{6}" y="{7}"/><handle id="6" x="{2}" y="{3}"/><handle id="7" x="{8}" y="{9}"/><handle id="8" x="{4}" y="{5}"/><handle id="9" x="{10}" y="{11}"/></handles><sidehandles><sidehandle id="0" x="{12}" y="{1}"/><sidehandle id="1" x="{13}" y="{1}"/><sidehandle id="2" x="{14}" y="{1}"/><sidehandle id="3" x="{15}" y="{1}"/><sidehandle id="4" x="{16}" y="{3}"/><sidehandle id="5" x="{17}" y="{3}"/><sidehandle id="6" x="{18}" y="{3}"/><sidehandle id="7" x="{19}" y="{3}"/><sidehandle id="8" x="{20}" y="{5}"/><sidehandle id="9" x="{21}" y="{5}"/><sidehandle id="10" x="{22}" y="{5}"/><sidehandle id="11" x="{23}" y="{5}"/></sidehandles><assistants>'.format(
+        file.write('<handles><handle id="0" x="{0}" y="{1}"/><handle id="1" x="{2}" y="{3}"/><handle id="2" x="{4}" y="{5}"/><handle id="3" x="{4}" y="{5}"/><handle id="4" x="{0}" y="{1}"/><handle id="5" x="{6}" y="{7}"/><handle id="6" x="{2}" y="{3}"/><handle id="7" x="{8}" y="{9}"/><handle id="8" x="{4}" y="{5}"/><handle id="9" x="{10}" y="{11}"/><handle id="10" x="{24}" y="{25}"/><handle id="11" x="{26}" y="{27}"/></handles><sidehandles><sidehandle id="0" x="{12}" y="{1}"/><sidehandle id="1" x="{13}" y="{1}"/><sidehandle id="2" x="{14}" y="{1}"/><sidehandle id="3" x="{15}" y="{1}"/><sidehandle id="4" x="{16}" y="{3}"/><sidehandle id="5" x="{17}" y="{3}"/><sidehandle id="6" x="{18}" y="{3}"/><sidehandle id="7" x="{19}" y="{3}"/><sidehandle id="8" x="{20}" y="{5}"/><sidehandle id="9" x="{21}" y="{5}"/><sidehandle id="10" x="{22}" y="{5}"/><sidehandle id="11" x="{23}" y="{5}"/></sidehandles><assistants>'.format(
         vxx, vxy, vyx, vyy, vzx, vzy,
         v2xx, v2xy, v2yx, v2yy, v2zx, v2zy,
         vxx - handleLength * 2, vxx - handleLength, vxx + handleLength, vxx + handleLength * 2,
         vyx - handleLength * 2, vyx - handleLength, vyx + handleLength, vyx + handleLength * 2,
-        vzx - handleLength * 2, vzx - handleLength, vzx + handleLength, vzx + handleLength * 2))
+        vzx - handleLength * 2, vzx - handleLength, vzx + handleLength, vzx + handleLength * 2,
+        self.settings.regionX * scaleX, self.settings.regionX * scaleY,
+        (self.settings.regionX + self.settings.regionWidth) * scaleX, (self.settings.regionY + self.settings.regionHeight) * scaleY))
         if not vxOrtho and not vyOrtho:
-            file.write('<assistant type="two point" useCustomColor="0" customColor="176,176,176,255"><gridDensity value="{0}"/><useVertical value="{1}"/><isLocal value="0"/><handles><handle ref="0"/><handle ref="1"/><handle ref="2"/></handles><sidehandles><sidehandle ref="0"/><sidehandle ref="1"/><sidehandle ref="2"/><sidehandle ref="3"/><sidehandle ref="4"/><sidehandle ref="5"/><sidehandle ref="6"/><sidehandle ref="7"/></sidehandles></assistant>'.format(1.0, 1 if not third else 0))
+            file.write('<assistant type="two point" useCustomColor="0" customColor="176,176,176,255"><gridDensity value="{0}"/><useVertical value="{1}"/><isLocal value="{2}"/><handles><handle ref="0"/><handle ref="1"/><handle ref="2"/>{3}</handles><sidehandles><sidehandle ref="0"/><sidehandle ref="1"/><sidehandle ref="2"/><sidehandle ref="3"/><sidehandle ref="4"/><sidehandle ref="5"/><sidehandle ref="6"/><sidehandle ref="7"/></sidehandles></assistant>'.format(1.0, 1 if not third else 0, local, regionHandles))
         else:
             if vxOrtho:
-               file.write('<assistant type="parallel ruler" useCustomColor="{0}" customColor="255,51,82,127"><isLocal value="0"/><handles><handle ref="4"/><handle ref="5"/></handles></assistant>'.format(1 if axis else 0))
+               file.write('<assistant type="parallel ruler" useCustomColor="{0}" customColor="255,51,82,127"><isLocal value="{1}"/><handles><handle ref="4"/><handle ref="5"/>{2}</handles></assistant>'.format(1 if axis else 0), local, regionHandles)
             else:
-                file.write('<assistant type="vanishing point" useCustomColor="0" customColor="176,176,176,255"><angleDensity value="{0}"/><isLocal value="0"/><handles><handle ref="0"/></handles><sidehandles><sidehandle ref="0"/><sidehandle ref="1"/><sidehandle ref="2"/><sidehandle ref="3"/></sidehandles></assistant>'.format(10.0))
+                file.write('<assistant type="vanishing point" useCustomColor="0" customColor="176,176,176,255"><angleDensity value="{0}"/><isLocal value="{1}"/><handles><handle ref="0"/>{2}</handles><sidehandles><sidehandle ref="0"/><sidehandle ref="1"/><sidehandle ref="2"/><sidehandle ref="3"/></sidehandles></assistant>'.format(10.0, local, regionHandles))
             if vyOrtho:
-               file.write('<assistant type="parallel ruler" useCustomColor="{0}" customColor="139,220,0,127"><isLocal value="0"/><handles><handle ref="6"/><handle ref="7"/></handles></assistant>'.format(1 if axis else 0))
+               file.write('<assistant type="parallel ruler" useCustomColor="{0}" customColor="139,220,0,127"><isLocal value="{1}"/><handles><handle ref="6"/><handle ref="7"/>{2}</handles></assistant>'.format(1 if axis else 0), local, regionHandles)
             else:
-                file.write('<assistant type="vanishing point" useCustomColor="0" customColor="176,176,176,255"><angleDensity value="{0}"/><isLocal value="0"/><handles><handle ref="1"/></handles><sidehandles><sidehandle ref="4"/><sidehandle ref="5"/><sidehandle ref="6"/><sidehandle ref="7"/></sidehandles></assistant>'.format(10.0))
+                file.write('<assistant type="vanishing point" useCustomColor="0" customColor="176,176,176,255"><angleDensity value="{0}"/><isLocal value="{1}"/><handles><handle ref="1"/>{2}</handles><sidehandles><sidehandle ref="4"/><sidehandle ref="5"/><sidehandle ref="6"/><sidehandle ref="7"/></sidehandles></assistant>'.format(10.0, local, regionHandles))
         if third:
             if vzOrtho:
-               file.write('<assistant type="parallel ruler" useCustomColor="{0}" customColor="40,144,255,127"><isLocal value="0"/><handles><handle ref="8"/><handle ref="9"/></handles></assistant>'.format(1 if axis else 0))
+               file.write('<assistant type="parallel ruler" useCustomColor="{0}" customColor="40,144,255,127"><isLocal value="{1}"/><handles><handle ref="8"/><handle ref="9"/>{2}</handles></assistant>'.format(1 if axis else 0), local, regionHandles)
             else:
-                file.write('<assistant type="vanishing point" useCustomColor="0" customColor="176,176,176,255"><angleDensity value="{0}"/><isLocal value="0"/><handles><handle ref="3"/></handles><sidehandles><sidehandle ref="8"/><sidehandle ref="9"/><sidehandle ref="10"/><sidehandle ref="11"/></sidehandles></assistant>'.format(10.0))
+                file.write('<assistant type="vanishing point" useCustomColor="0" customColor="176,176,176,255"><angleDensity value="{0}"/><isLocal value="{1}"/><handles><handle ref="3"/>{2}</handles><sidehandles><sidehandle ref="8"/><sidehandle ref="9"/><sidehandle ref="10"/><sidehandle ref="11"/></sidehandles></assistant>'.format(10.0, local, regionHandles))
         if axis:
             if not vxOrtho:
                 file.write('<assistant type="ruler" useCustomColor="1" customColor="255,51,82,127"><subdivisions value="0"/><minorSubdivisions value="0"/><fixedLength value="0" enabled="0" unit="px"/><handles><handle ref="4"/><handle ref="5"/></handles><sidehandles/></assistant>')
@@ -1132,6 +1398,28 @@ class BlenderLayer(DockWidget):
                 
         file.write('</assistants></paintingassistant>')
         file.close()
+
+    def requestUVLayout(self):
+        d = self.activeDocument if self.activeDocument else instance.activeDocument()
+        if not os.path.exists(self.settings.renderPath):
+            os.makedirs(self.settings.renderPath)
+        self.server.sendMessage(('uvLayout', os.path.join(self.settings.renderPath, 'uvLayout.svg'), d.width(), d.height()))
+       
+    def importUVLayout(self, msg):
+        d = self.activeDocument if self.activeDocument else instance.activeDocument()
+        f = open(msg[1],'r')
+        with f:
+            data = f.read()            
+            n = d.createVectorLayer(self.settings.uvLayerName)
+            n.addShapesFromSvg(data)
+            d.rootNode().addChildNode(n, None)
+        os.remove(msg[1])
+         
+    def requestCreateCamera(self):
+        name, ok = QInputDialog.getText(self, i18n("New Camera"), i18n("Name"), QLineEdit.Normal, self.settings.layerName)
+    
+        if ok:
+            self.server.sendMessage(('createCamera', name))
                     
     def updatePoseLibrary(self, items, clearPreviews):
         visible = len(items) > 0
@@ -1248,10 +1536,7 @@ class BlenderLayer(DockWidget):
     def updateFrame(self):
         if not self.isLayoutEnabled(self.updateButtonLayout):
             return
-        if self.settings.viewMode > 3:
-            self.server.requestTexture = 2 if self.settings.viewMode == 5 else 1
-        else:
-            self.server.sendMessage(('requestFrame', True))
+        self.server.sendMessage(('requestFrame', True))
         
     def updateAnimation(self, render = False):
         if not self.isLayoutEnabled(self.renderButtonLayout if render else self.updateButtonLayout):
@@ -1322,6 +1607,11 @@ class BlenderLayer(DockWidget):
             self.progress.show()
             self.setLayoutEnabled(self.renderButtonLayout, False)
             self.setLayoutEnabled(self.updateButtonLayout, False)
+            
+    def updateTexture(self):
+        if not self.textureUpdate.isEnabled:
+            return
+        self.server.requestTexture = 2 if self.settings.viewMode == 5 else 1
             
     def saveFilenameToLayer(self, fileName, overwrite = True):
         d = self.activeDocument if self.activeDocument else instance.activeDocument()
@@ -1446,16 +1736,50 @@ class BlenderLayer(DockWidget):
         self.settings.shading = shading
         self.cyclesWarning.setVisible(engine == 'CYCLES' and shading == 3)            
 
+    def textureChanged(self, index):
+        d = instance.activeDocument()
+        k = instance.activeDocument().rootNode().uniqueId()
+
+        if index == 0:
+            if k in self.settings.documentTextureMap:
+                self.settings.documentTextureMap.pop(k)
+        elif index == 1:
+            name, ok = QInputDialog.getText(self, i18n("New Texture"), i18n("Name"), QLineEdit.Normal, self.settings.layerName)
+		
+            if ok:
+                self.server.sendMessage(('newTexture', name, d.width(), d.height(), True, False, d.fileName()))
+                self.settings.documentTextureMap[k] = name
+            else:
+                self.textures.setCurrentIndex(0)     
+        elif index >= 2:
+            self.settings.documentTextureMap[k] = self.settings.textures[index - 2][0]
+
     def viewModeChanged(self, index, fromClient = False):
         self.settings.viewMode = index
         if self.server and self.server.running and not fromClient:
             self.server.sendMessage(('viewMode', index))
-        self.setLayoutVisible(self.updateLayout, index != 3)
+        self.setLayoutVisible(self.updateLayout, index != 3 and index != 4)
+        self.updateGroup.setVisible(index != 3 and index != 4)
+        self.setLayoutVisible(self.texUpdateLayout, index > 3)
+        self.texUpdateGroup.setVisible(index > 3)
         self.viewGroup.setVisible(index < 3 or index == 5)
-        self.updateGroup.setVisible(index != 3)
         self.libraryGroup.setVisible(index < 3)
         self.renderGroup.setVisible(index == 3)
+        self.uvGroup.setVisible(index == 4)
+        self.projGroup.setVisible(index == 5)
         self.setLayoutVisible(self.currentViewLayout, index < 2 or index == 5)
+        self.setLayoutVisible(self.cameraLayout, index < 2 or index == 5)
+        
+        d = instance.activeDocument()
+        
+        if not d or not d.rootNode():
+            return
+        l2 = d.nodeByName(self.settings.projLayerName)
+        if index == 5 and (l2 == None or l2 == 0 or l2.index() == -1):
+            l2 = d.createNode(self.settings.projLayerName, 'paintLayer')
+            d.rootNode().addChildNode(l2, None)   
+        elif index != 5 and not (l2 == None or l2 == 0 or l2.index() == -1):
+            l2.remove()
             
     def updateModeChanged(self, index, fromClient = False):
         self.settings.updateMode = index
@@ -1498,8 +1822,10 @@ class BlenderLayer(DockWidget):
         
     def readSettings(self):        
         self.settings.blenderPath = instance.readSetting('blender_layer', 'blenderPath', '')
-        self.settings.renderPath = instance.readSetting('blender_layer', 'renderPath', '/tmp/BlenderLayer')
+        self.settings.renderPath = instance.readSetting('blender_layer', 'renderPath', '/tmp/BlenderLayer/')
         self.settings.layerName = instance.readSetting('blender_layer', 'layerName', 'Blender Layer')
+        self.settings.projLayerName = instance.readSetting('blender_layer', 'projLayerName', 'Projection')
+        self.settings.uvLayerName = instance.readSetting('blender_layer', 'uvLayerName', 'UV Layout')
         self.settings.relPath = instance.readSetting('blender_layer', 'relPath', 'True') == 'True'
         self.settings.navigateAlt = instance.readSetting('blender_layer', 'navigateAlt', 'True') == 'True'
 
@@ -1507,11 +1833,15 @@ class BlenderLayer(DockWidget):
         
         self.settings.host = instance.readSetting('blender_layer', 'host', '127.0.0.1')
         portStr = instance.readSetting('blender_layer', 'port', '')
+        portTriesStr = instance.readSetting('blender_layer', 'portTries', '')
+        timeoutStr = instance.readSetting('blender_layer', 'timeout', '')
         self.settings.sharedMem = instance.readSetting('blender_layer', 'sharedMem', 'True') == 'True'
 
         self.settings.assistantsThreePoint = instance.readSetting('blender_layer', 'assistantsThreePoint', 'True') == 'True'
         self.settings.assistantsAxis = instance.readSetting('blender_layer', 'assistantsAxis', 'True') == 'True'
-        
+        self.settings.assistantsRegion = instance.readSetting('blender_layer', 'assistantsRegion', 'True') == 'True'
+        self.settings.cursorColor = instance.readSetting('blender_layer', 'cursorColor', '#FFFF00')
+
         self.settings.overrideSRGB = instance.readSetting('blender_layer', 'overrideSRGB', 'True') == 'True'
         self.settings.colorManageBlender = instance.readSetting('blender_layer', 'colorManageBlender', 'True') == 'True'
         self.settings.convertBGR = instance.readSetting('blender_layer', 'convertBGR', 'True') == 'True'
@@ -1519,11 +1849,21 @@ class BlenderLayer(DockWidget):
         self.settings.backgroundDraw = instance.readSetting('blender_layer', 'backgroundDraw', 'False') == 'True'
         lockFramesStr = instance.readSetting('blender_layer', 'lockFrames', '')
 
+        self.settings.uvCursor = instance.readSetting('blender_layer', 'uvCursor', 'True') == 'True'
+
         try:
             self.settings.port = int(portStr)
         except ValueError:
             self.settings.port = 65432
-            
+        try:
+            self.settings.portTries = int(portTriesStr)
+        except ValueError:
+            self.settings.portTries = 10
+        try:
+            self.settings.timeout = float(timeoutStr)
+        except ValueError:
+            self.settings.timeout = 10.0
+                
         try:
             lib = []
             for e in libraryStr.split('////'):
@@ -1542,16 +1882,23 @@ class BlenderLayer(DockWidget):
         instance.writeSetting('blender_layer', 'blenderPath', self.settings.blenderPath)
         instance.writeSetting('blender_layer', 'renderPath', self.settings.renderPath)
         instance.writeSetting('blender_layer', 'layerName', self.settings.layerName)
+        instance.writeSetting('blender_layer', 'uvLayerName', self.settings.uvLayerName)
+        instance.writeSetting('blender_layer', 'projLayerName', self.settings.projLayerName)
         instance.writeSetting('blender_layer', 'relPath', str(self.settings.relPath))
         instance.writeSetting('blender_layer', 'navigateAlt', str(self.settings.navigateAlt))
         instance.writeSetting('blender_layer', 'library', '////'.join([name + '\\\\' + file + '\\\\' + innerpath for (name, file, innerpath) in self.settings.library]))
         instance.writeSetting('blender_layer', 'host', self.settings.host)
         instance.writeSetting('blender_layer', 'port', str(self.settings.port))
+        instance.writeSetting('blender_layer', 'portTries', str(self.settings.portTries))
+        instance.writeSetting('blender_layer', 'timeout', str(self.settings.timeout))
         instance.writeSetting('blender_layer', 'sharedMem', str(self.settings.sharedMem))
         instance.writeSetting('blender_layer', 'assistantsThreePoint', str(self.settings.assistantsThreePoint))
         instance.writeSetting('blender_layer', 'assistantsAxis', str(self.settings.assistantsAxis))
+        instance.writeSetting('blender_layer', 'assistantsRegion', str(self.settings.assistantsRegion))
+        instance.writeSetting('blender_layer', 'cursorColor', str(self.settings.cursorColor))
         instance.writeSetting('blender_layer', 'overrideSRGB', str(self.settings.overrideSRGB))
         instance.writeSetting('blender_layer', 'colorManageBlender', str(self.settings.colorManageBlender))
         instance.writeSetting('blender_layer', 'convertBGR', str(self.settings.convertBGR))
         instance.writeSetting('blender_layer', 'backgroundDraw', str(self.settings.backgroundDraw))
         instance.writeSetting('blender_layer', 'lockFrames', str(self.settings.lockFrames))
+        instance.writeSetting('blender_layer', 'uvCursor', str(self.settings.uvCursor))

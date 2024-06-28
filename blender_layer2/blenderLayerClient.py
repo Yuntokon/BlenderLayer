@@ -12,7 +12,7 @@ bl_info = {
     'name': "Connect to Krita (Blender Layer)",
     'author': "Yuntoko",
     'description': "Companion for the 'Blender Layer' Krita plugin",
-    'version': (1, 0),
+    'version': (2, 0),
     'blender': (2, 80, 0),
     'category': '3D View',
 }
@@ -20,11 +20,16 @@ client = None
 HOST = 'localhost'
 PORT = 65432
 CONNECT = False
+TIMEOUT = 10.0
 try:
     argv = sys.argv
     index = argv.index('--connect-to-krita')
     HOST = argv[index + 1]
     PORT = int(argv[index + 2])
+    try:
+        TIMEOUT = float(argv[index + 3])
+    except ValueError:
+        pass
     CONNECT = True
 except ValueError:
     pass
@@ -70,7 +75,7 @@ class BlenderLayerClient():
     def connect(self, host, port):
         HOST = host
         PORT = port
-        MAGIC = b'BLENDER_LAYER_V1'
+        MAGIC = b'BLENDER_LAYER_V2'
         
         self.disconnect()
            
@@ -105,12 +110,20 @@ class BlenderLayerClient():
         self.cursorY = -1
         self.cursorSizeX = -1
         self.cursorSizeY = -1
-
-        print(f"[Blender Layer] Connecting to krita on port {PORT}...")
+        self.refreshHack = False
+        self.cursorColor = mathutils.Vector((1.0, 1.0, 0.0))
+        
+        self.viewLocation = mathutils.Vector((0, 0, 0))
+        self.viewRotation = mathutils.Quaternion((0.71579509973526, 0.4389207363128662, 0.29061830043792725, 0.4588318467140198))
+        self.viewDistance = 17.986562728881836   
+        self.viewPerspective = 'PERSP'
+        self.viewLens = 50.0
+                
+        print(f"[Blender Layer] Connecting to Krita on port {PORT}...")
         try:
             self.connected = True
             self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.s.settimeout(5.0)
+            self.s.settimeout(TIMEOUT)
             self.s.connect((HOST, PORT))
 
             self.s.sendall(MAGIC)
@@ -119,9 +132,14 @@ class BlenderLayerClient():
                 print("[Blender Layer] Protocol error: Expected " + MAGIC.decode('ASCII') + " not " + check.decode('ASCII'))
                 raise RuntimeError("Protocol error")
                 
-            type, self.width, self.height, self.regionX, self.regionY, self.regionWidth, self.regionHeight, self.regionViewport, scale, framerateScale, self.formatDepth, self.bytesPerPixel, self.colorManagement, self.bgrConversion, self.transparency, self.gizmos, self.lensZoom, self.viewMode, self.updateMode, self.renderCurrentView, self.sharedMem, self.backgroundDraw = recvObj(self.s)
+            type, self.width, self.height, self.regionX, self.regionY, self.regionWidth, self.regionHeight, self.regionViewport, scale, framerateScale, self.formatDepth, self.bytesPerPixel, self.colorManagement, self.bgrConversion, self.transparency, self.gizmos, self.lensZoom, self.viewMode, self.updateMode, self.renderCurrentView, self.sharedMem, self.backgroundDraw, cursorColorString = recvObj(self.s)
             self.scale = 2 ** scale
             self.framerateScale = 4 ** framerateScale
+            try:
+                h = cursorColorString.lstrip('#')
+                self.cursorColor = mathutils.Vector(tuple(float(int(h[i:i+2], 16)) / 255.0 for i in (0, 2, 4)))
+            except Exception as e:
+                pass
             self.orgWidth = self.width
             self.orgHeight = self.height
             self.dtype = np.uint8
@@ -132,12 +150,12 @@ class BlenderLayerClient():
             elif self.formatDepth == 'RGBA32F':
                 self.dtype = np.float32
                 
-            loaded = hasattr(bpy.data, 'filepath')
-            
+            loaded = hasattr(bpy.data, 'filepath')          
             self.prevFile = bpy.data.filepath if loaded else ''
             sendObj(self.s, ('Init', self.transparency_support, self.prevFile))
             if loaded:
                 self.updatePoseLib()
+                self.updateTextures()
                     
             if self.sharedMem:
                 self.shm = shared_memory.SharedMemory(name=(f'krita_blender_layer:{PORT}'))
@@ -287,9 +305,16 @@ class BlenderLayerClient():
         self.sendMessage(('file', bpy.data.filepath))
         self.freeOffscreen()
         self.updatePoseLib()
+        self.updateTextures()
         self.active_space = None
         self.active_region = None
-        self.prevEngine = None
+        self.prevEngine = None       
+        
+        self.viewLocation = mathutils.Vector((0, 0, 0))
+        self.viewRotation = mathutils.Quaternion((0.71579509973526, 0.4389207363128662, 0.29061830043792725, 0.4588318467140198))
+        self.viewDistance = 17.986562728881836   
+        self.viewPerspective = 'PERSP'
+        self.viewLens = 50.0
 
     @persistent
     def onDepsGraphChanged(self, scene, depsGraph):
@@ -298,7 +323,7 @@ class BlenderLayerClient():
         for update in depsGraph.updates:
             if isinstance(update.id, bpy.types.Action):
                 flag = True
-                
+
         if numIds != self.prevNumIds:
             flag = True
         if flag:
@@ -324,7 +349,45 @@ class BlenderLayerClient():
         
     def getPosePreview(self, action):
         return np.array(action.preview.image_pixels, copy=False).ravel(order = 'F').reshape(128, 128)[::-1,:].ravel().tobytes()
-        
+       
+    def updateTextures(self):
+        textures = [(i.name, i.filepath) for i in bpy.data.images]
+        self.sendMessage(('textures', textures))
+            
+    def createCamera(self, space, name):
+        cam = bpy.data.cameras.new(name)
+        cam.type = self.viewPerspective if self.viewMode == 1 else space.region_3d.view_perspective
+        if space.region_3d.view_perspective == 'ORTHO':
+            cam.ortho_scale = 2.0 / (self.viewLens / 36.0 / self.viewDistance) if self.viewMode == 1 else 2.0 / (space.lens / 36.0 / space.region_3d.view_distance)
+            cam.clip_start = space.clip_start
+            cam.clip_end = space.clip_end
+        else:         
+            cam.lens = self.viewLens if self.viewMode == 1 else space.lens
+            cam.sensor_width = 2.0 * 36.0
+            cam.clip_start = space.clip_start
+            cam.clip_end = space.clip_end
+        obj = bpy.data.objects.new(name, cam)
+        obj.rotation_mode = 'QUATERNION'
+        if self.viewMode == 1:
+            obj.location = self.viewLocation + (self.viewRotation @ mathutils.Vector((0, 0, self.viewDistance)))
+            obj.rotation_quaternion = self.viewRotation
+            obj.data['view_distance'] = self.viewDistance
+
+        else:
+            obj.location = space.region_3d.view_location + (space.region_3d.view_rotation @ mathutils.Vector((0, 0, space.region_3d.view_distance)))
+            obj.rotation_quaternion = space.region_3d.view_rotation
+            obj.data['view_distance'] = space.region_3d.view_distance
+        region = self.regionX != 0 or self.regionY != 0 or self.regionWidth != self.width or self.regionHeight != self.height 
+        obj.data['region'] = region
+        if region:
+            obj.data['region_x'] = self.regionX
+            obj.data['region_y'] = self.regionY
+            obj.data['region_width'] = self.regionWidth
+            obj.data['region_height'] = self.regionHeight
+            obj.data['region_viewport'] = self.regionViewport
+        bpy.context.scene.collection.objects.link(obj)
+        return obj
+
     def sendMessage(self, msg):
         self.sendQueue.put(msg)
       
@@ -397,19 +460,30 @@ class BlenderLayerClient():
                 msg = self.recvQueue.get()
                 type = msg[0]
                 if type == 'rotate':
-                    if space:
+                    if self.viewMode == 1:
+                        self.viewRotation = mathutils.Euler((msg[1], -msg[3], msg[2])).to_quaternion()
+                    elif space:
                         space.region_3d.view_rotation = mathutils.Euler((msg[1], -msg[3], msg[2])).to_quaternion()
                     flag = True
                 elif type == 'pan':
-                    if space:
+                    if self.viewMode == 1:
+                        self.viewLocation += (mathutils.Quaternion(self.viewRotation) @ mathutils.Vector((-msg[1], msg[2], 0))) * self.viewDistance * 0.25
+                    elif space:
                         space.region_3d.view_location += (mathutils.Quaternion(space.region_3d.view_rotation) @ mathutils.Vector((-msg[1], msg[2], 0))) * space.region_3d.view_distance * 0.25
                     flag = True
                 elif type == 'zoom':
-                    if space:
+                    if self.viewMode == 1:
+                        self.viewDistance *= math.exp(0.25 * msg[1])
+                    elif space:  
                         space.region_3d.view_distance *= math.exp(0.25 * msg[1])
                     flag = True
                 elif type == 'lens':
-                    if space:
+                    if self.viewMode == 1:
+                        prevLens = self.viewLens
+                        self.viewLens = msg[1]
+                        if self.lensZoom:
+                            self.viewDistance *= self.viewLens / prevLens
+                    elif space:
                         prevLens = space.lens
                         space.lens = msg[1]
                         if self.lensZoom:
@@ -418,7 +492,9 @@ class BlenderLayerClient():
                 elif type == 'lensZoom':
                     self.lensZoom = msg[1]
                 elif type == 'ortho':
-                    if space:
+                    if self.viewMode == 1:
+                        self.viewPerspective = 'ORTHO' if msg[1] else 'PERSP'
+                    elif space:
                         space.region_3d.view_perspective = 'ORTHO' if msg[1] else 'PERSP'
                     flag = True
                 elif type == 'transparency':
@@ -467,6 +543,10 @@ class BlenderLayerClient():
                     self.framerateScale = 4 ** msg[1]
                 elif type == 'viewMode':
                     self.viewMode = msg[1]
+                    self.cursorX = -1
+                    self.cursorY = -1
+                    self.cursorSizeX = -1
+                    self.cursorSizeY = -1
                 elif type == 'updateMode':
                     self.updateMode = msg[1]
                     if self.updateMode == 0:
@@ -598,22 +678,7 @@ class BlenderLayerClient():
                         self.updateMode = 3
                         try:
                             if self.renderCurrentView and space.region_3d.view_perspective != 'CAMERA':
-                                cam = bpy.data.cameras.new('BlenderLayer_TMP')
-                                cam.type = space.region_3d.view_perspective
-                                if space.region_3d.view_perspective == 'ORTHO':
-                                    cam.ortho_scale = 2.0 / (space.lens / 36.0 / space.region_3d.view_distance)
-                                    cam.clip_start = space.clip_start
-                                    cam.clip_end = space.clip_end
-                                else:                               
-                                    cam.lens = space.lens
-                                    cam.sensor_width = 2.0 * 36.0
-                                    cam.clip_start = space.clip_start
-                                    cam.clip_end = space.clip_end
-                                obj = bpy.data.objects.new('BlenderLayer_TMP', cam)
-                                obj.location = space.region_3d.view_location + (space.region_3d.view_rotation @ mathutils.Vector((0, 0, space.region_3d.view_distance)))
-                                obj.rotation_mode = 'QUATERNION'
-                                obj.rotation_quaternion = space.region_3d.view_rotation
-                                bpy.context.scene.collection.objects.link(obj)
+                                obj = self.createCamera(space, "BlenderLayer_TMP")
                                 self.prevCamera = bpy.context.scene.camera
                                 self.tmpCamera = obj
                                 bpy.context.scene.camera = obj
@@ -681,6 +746,51 @@ class BlenderLayerClient():
                     else:
                         print("[Blender Layer] Cannot create assistants, since there is no active space")
                         self.sendMessage(('status', "Cannot create assistants, since there is no active space"))
+                elif type == 'createCamera':
+                    if bpy.data.cameras.get(msg[1]) or bpy.data.objects.get(msg[1]):
+                        self.sendMessage(('status', f"Camera '{msg[1]}' already exists!"))
+                    else:
+                        obj = self.createCamera(space, msg[1])
+                        self.sendMessage(('status', f"Created camera '{msg[1]}'"))
+                elif type == 'moveToCamera':
+                    obj = bpy.data.objects[msg[1]]
+                    cam = bpy.data.cameras[msg[1]]
+
+                    dist = obj.data.get('view_distance')
+                    if not dist:
+                        dist = self.viewDistance if self.viewMode == 1 else space.region_3d.view_distance
+
+                    if self.viewMode == 1:
+                        self.viewPerspective = cam.type
+                        self.viewDistance = dist
+                        self.viewRotation = obj.matrix_world.to_quaternion()
+                        self.viewLocation = obj.location - (self.viewRotation @ mathutils.Vector((0, 0, dist)))
+                        self.viewLens = 2.0 * 36.0 * dist / cam.ortho_scale if self.viewPerspective == 'ORTHO' else cam.lens
+                    else:
+                        space.region_3d.view_perspective = cam.type
+                        space.region_3d.view_distance = dist
+                        space.region_3d.view_rotation = obj.matrix_world.to_quaternion()
+                        space.region_3d.view_location = obj.location - (space.region_3d.view_rotation @ mathutils.Vector((0, 0, dist)))
+                        space.lens = 2.0 * 36.0 * dist / cam.ortho_scale if self.viewPerspective == 'ORTHO' else cam.lens
+                     
+                    space.clip_start = space.clip_start
+                    space.clip_end = space.clip_end
+                    space.region_3d.update()
+
+                    reg = obj.data.get('region')
+                    if reg != None:
+                        if reg:
+                            self.sendMessage(('region', True, obj.data.get('region_x', 0), obj.data.get('region_y', 0), obj.data.get('region_width', self.width), obj.data.get('region_height', self.height), obj.data.get('region_viewport', True)))
+                        else:
+                            self.sendMessage(('region', False))
+
+                    self.sendMessage(('status', f"Moved to camera '{msg[1]}'"))
+
+                elif type == 'cameraList':
+                    self.sendMessage(('cameraList', [obj.name for obj in bpy.data.objects if obj.type == "CAMERA"]))
+                elif type == 'uvLayout':
+                    bpy.ops.uv.export_layout(filepath=msg[1], export_all=False, modified=False, mode='SVG', size=(msg[2], msg[3]), opacity=0.25, check_existing=False)
+                    self.sendMessage(('uvLayout', msg[1]))
                 elif type == 'file':
                     bpy.ops.wm.open_mainfile(filepath=msg[1])
                     self.requestDelayedFrame = True
@@ -691,43 +801,65 @@ class BlenderLayerClient():
                     self.cursorSizeX = msg[3]
                     self.cursorSizeY = msg[4]
                     region.tag_redraw()
+                elif type == 'uvCursor':
+                    self.cursorX = -1
+                    self.cursorY = -1
+                    self.cursorSizeX = -1
+                    self.cursorSizeY = -1
+                    region.tag_redraw()
+                elif type == 'newTexture':
+                    img = bpy.data.images.new(msg[1], msg[2], msg[3], alpha=msg[4], float_buffer=msg[5])
+                    img.filepath = msg[6]
+                    self.updateTextures()
                 elif type == 'updateTexture':
                     t = time.monotonic()
                     img = bpy.data.images.get(msg[1])
                     if not img:
                         img = bpy.data.images.new(msg[1], self.width, self.height, alpha=True)
+                        self.updateTextures()
                     if img.size[0] != self.width or img.size[1] != self.height:
                         img.scale(self.width, self.height)
                     img.pixels.foreach_set(self.texBuf)
                     img.update()
-                    space.region_3d.view_distance = space.region_3d.view_distance + 0.00001
-                    region.tag_redraw()
+                    space.region_3d.view_distance = space.region_3d.view_distance + (-0.00001 if self.refreshHack else 0.00001)
+                    self.refreshHack = not self.refreshHack
+                    for area in bpy.context.screen.areas:
+                        if area.type in ['IMAGE_EDITOR', 'VIEW_3D']:
+                            area.tag_redraw()
+
                     print("Time2:", (time.monotonic() - t) * 1000)
+                elif type == 'falloff':
+                    bpy.context.tool_settings.image_paint.use_normal_falloff = msg[1]
+
+                elif type == 'falloffAngle':
+                    bpy.context.tool_settings.image_paint.normal_angle = msg[1]
+                   
+                elif type == 'occlude':
+                    bpy.context.tool_settings.image_paint.use_occlude = msg[1]
+                    
+                elif type == 'backface':
+                    bpy.context.tool_settings.image_paint.use_backface_culling = msg[1]
+                    
+                elif type == 'bleed':
+                    bpy.context.tool_settings.image_paint.seam_bleed = msg[1]
+                                        
                 elif type == 'projectTexture':
                     #print(bpy.context.active_object.material_slots[0].material.texture_paint_images[0])
                     t = time.monotonic()
                     if space.region_3d.view_perspective != 'CAMERA':
-                        cam = bpy.data.cameras.new('BlenderLayer_TMP')
-                        cam.type = space.region_3d.view_perspective
-                        if space.region_3d.view_perspective == 'ORTHO':
-                            cam.ortho_scale = 2.0 / (space.lens / 36.0 / space.region_3d.view_distance)
-                            cam.clip_start = space.clip_start
-                            cam.clip_end = space.clip_end
-                        else:                               
-                            cam.lens = space.lens
-                            cam.sensor_width = 2.0 * 36.0
-                            cam.clip_start = space.clip_start
-                            cam.clip_end = space.clip_end
-                        obj = bpy.data.objects.new('BlenderLayer_TMP', cam)
-                        obj.location = space.region_3d.view_location + (space.region_3d.view_rotation @ mathutils.Vector((0, 0, space.region_3d.view_distance)))
-                        obj.rotation_mode = 'QUATERNION'
-                        obj.rotation_quaternion = space.region_3d.view_rotation
-                        bpy.context.scene.collection.objects.link(obj)
+                        obj = self.createCamera(space, 'BlenderLayer_TMP')
                         self.prevCamera = bpy.context.scene.camera
                         self.tmpCamera = obj
                         bpy.context.scene.camera = self.tmpCamera
                     if bpy.ops.paint.project_image(image=msg[1]) == {'CANCELLED'}:
-                        self.sendMessage(('status', "Couldn't project image... Make sure you have set up a texture"))
+                        if bpy.context.tool_settings.image_paint.missing_uvs: 
+                            self.sendMessage(('status', "Couldn't project image... UV layer missing"))
+                        elif bpy.context.tool_settings.image_paint.missing_texture: 
+                            self.sendMessage(('status', "Couldn't project image... Texture missing"))
+                        elif bpy.context.tool_settings.image_paint.missing_materials: 
+                            self.sendMessage(('status', "Couldn't project image... Materials missing"))
+                        else:
+                            self.sendMessage(('status', "Couldn't project image... Make sure you have set up texture painting in Blender"))
 
                     if self.tmpCamera:
                         bpy.context.scene.camera = self.prevCamera
@@ -735,11 +867,13 @@ class BlenderLayerClient():
                     self.tmpCamera = None
                     self.prevCamera = None
                     self.requestDelayedFrame = True
-                    print(bpy.context.tool_settings.image_paint.use_normal_falloff)
                     print("Time3:", (time.monotonic() - t) * 1000)
                 elif type == 'undo':
                     print('UNDO')
                     bpy.ops.ed.undo()
+                elif type == 'redo':
+                    print('REDO')
+                    bpy.ops.ed.redo()
                 else:
                     print("[Blender Layer] Received unrecognized message type: ", type)  
                     
@@ -751,36 +885,50 @@ class BlenderLayerClient():
             self.sendMessage(('status', str(e)))
 
         if space and space.region_3d:
-            rot = mathutils.Quaternion(space.region_3d.view_rotation).to_euler()
-            lens = space.lens
-            ortho = space.region_3d.view_perspective == 'ORTHO'
+            if self.viewMode == 1:
+                rot = self.viewRotation.to_euler()
+                lens = self.viewLens
+                ortho = self.viewPerspective == 'ORTHO'
+
+            else:
+                rot = mathutils.Quaternion(space.region_3d.view_rotation).to_euler()
+                lens = space.lens
+                ortho = space.region_3d.view_perspective == 'ORTHO'
             shading = space.shading.type
             if shading == 'SOLID' and space.shading.color_type == 'TEXTURE' and space.shading.light == 'FLAT':
                 shading = 'FLAT_TEXTURE'
             shading = ['WIREFRAME', 'SOLID', 'FLAT_TEXTURE', 'MATERIAL', 'RENDERED'].index(shading)
             engine = bpy.context.scene.render.engine
             
+            flag1 = False
             if flag:
-                if space.region_3d.view_perspective == 'CAMERA':
-                    space.region_3d.view_perspective = 'PERSP'
-                space.region_3d.update()
+                if self.viewMode != 1:
+                    if space.region_3d.view_perspective == 'CAMERA':
+                        space.region_3d.view_perspective = 'PERSP'
+                    space.region_3d.update()
             else:
                 if self.prevRot != rot:
                     roll = -rot.y
                     self.sendMessage(('rotate', rot.x, rot.z, roll))
+                    flag1 = True
                 if self.prevLens != lens:
                     self.sendMessage(('lens', lens))
+                    flag1 = True
                 if self.prevOrtho != ortho:
                     self.sendMessage(('ortho', ortho))
+                    flag1 = True
                 if self.prevShading != shading:
                     self.sendMessage(('shading', shading))  
+                    flag1 = True
                     
             if self.prevEngine != engine:
                 self.sendMessage(('engine', engine))
-                
+                flag1 = True
+
             if self.prevFile != bpy.data.filepath:
                 self.sendMessage(('file', bpy.data.filepath))
                 self.prevFile = bpy.data.filepath
+                flag1 = True
 
             if self.prevShading != shading or self.prevEngine != engine:
                 self.freeOffscreen()
@@ -788,20 +936,23 @@ class BlenderLayerClient():
             if self.isAnimation and not self.isRendering and bpy.context.scene.frame_current != self.animFrame:
                 bpy.context.scene.frame_set(self.animFrame)
                 
+            if self.updateMode == 2 and flag1:
+                self.requestFrame = True
+                
             self.prevRot = rot
             self.prevLens = lens
             self.prevOrtho = ortho
             self.prevShading = shading
             self.prevEngine = engine
             
-            if self.requestFrame or self.updateMode == 0:
+            if (self.requestFrame or self.updateMode == 0) and self.viewMode != 4:
                 self.ticksWaitingForFrame = self.ticksWaitingForFrame + 1
                 if self.ticksWaitingForFrame == 60:
                     self.tagForRedraw()
                 elif self.ticksWaitingForFrame == 120:
                     self.sendMessage(('status', "Waiting for on draw event... Make sure Blender is not minimized"))
             
-            if self.backgroundDraw and (self.requestFrame or self.updateMode == 0 or self.isAnimation and not self.isRendering):
+            if self.backgroundDraw and self.viewMode != 4 and (self.requestFrame or self.updateMode == 0 or self.isAnimation and not self.isRendering):
                 self.draw(space, region)
                 
         return 0.0166
@@ -815,7 +966,7 @@ class BlenderLayerClient():
                 self.requestFrame = True
             self.requestDelayedFrame = False
 
-        if self.connected and not self.backgroundDraw:
+        if self.connected and not self.backgroundDraw and self.viewMode != 4:
             self.draw(self.active_space, self.active_region)
             
     def sendData(self):
@@ -950,18 +1101,25 @@ class BlenderLayerClient():
             print(e)
 
     def getMats(self, context, space):
-        if (self.viewMode == 0 or self.viewMode == 4 or self.viewMode == 5) and not space.region_3d.view_perspective == 'CAMERA' or (self.viewMode == 3 and self.renderCurrentView) or not context.scene.camera:
+        if (self.viewMode <= 1 or self.viewMode >= 4) and not space.region_3d.view_perspective == 'CAMERA' or (self.viewMode == 3 and self.renderCurrentView) or not context.scene.camera:
             #vm = space.region_3d.view_matrix
             #pm = space.region_3d.window_matrix.copy()
 
-            vm = (mathutils.Matrix.Translation(mathutils.Vector(space.region_3d.view_location)) @ mathutils.Quaternion(space.region_3d.view_rotation).to_matrix().to_4x4() @ mathutils.Matrix.Translation((0, 0, space.region_3d.view_distance))).inverted() 
+            if self.viewMode == 1:
+                vm = (mathutils.Matrix.Translation(mathutils.Vector(self.viewLocation)) @ mathutils.Quaternion(self.viewRotation).to_matrix().to_4x4() @ mathutils.Matrix.Translation((0, 0, self.viewDistance))).inverted()        
+                dist = self.viewDistance
+                ortho = self.viewPerspective == 'ORTHO'
+                size = self.viewLens / 36.0 / dist if ortho else self.viewLens / 36.0
+
+            else:
+                vm = (mathutils.Matrix.Translation(mathutils.Vector(space.region_3d.view_location)) @ mathutils.Quaternion(space.region_3d.view_rotation).to_matrix().to_4x4() @ mathutils.Matrix.Translation((0, 0, space.region_3d.view_distance))).inverted()        
+                dist = space.region_3d.view_distance
+                ortho = space.region_3d.view_perspective == 'ORTHO'
+                size = space.lens / 36.0 / dist if ortho else space.lens / 36.0
             
             near = space.clip_start
             far = space.clip_end    
-            dist = space.region_3d.view_distance
-            size = space.lens / 36.0 / dist if space.region_3d.view_perspective == 'ORTHO' else space.lens / 36.0
-            ratio = self.regionWidth / self.regionHeight
-            
+            ratio = self.regionWidth / self.regionHeight        
             if self.regionViewport:
                 m = max(self.width, self.height)
                 m = min(m / self.regionWidth, m / self.regionHeight)
@@ -977,7 +1135,7 @@ class BlenderLayerClient():
             div = (near - far)
             if div == 0:
                 div = 1e-9
-            if space.region_3d.view_perspective == 'ORTHO':
+            if ortho:
                 pm = mathutils.Matrix((( p00, 0, 0, -shiftX),
                       ( 0, p11, 0, -shiftY),
                       ( 0, 0, -2.0 / far, 0),
@@ -1018,6 +1176,13 @@ class ConnectOperator(bpy.types.Operator):
             succeeded = client.disconnect()
 
         else:
+            preferences = context.preferences
+            if not __name__ == '__main__':
+                prefs = preferences.addons[__name__].preferences 
+                prefs.host = self.host
+                prefs.port = self.port
+                TIMEOUT = prefs.timeout
+
             succeeded = client.connect(self.host, self.port)
             if succeeded:
                 self.report({'INFO'}, "Connected")
@@ -1027,6 +1192,13 @@ class ConnectOperator(bpy.types.Operator):
 
     def invoke(self, context, event):
         wm = context.window_manager
+        preferences = context.preferences
+        
+        if not __name__ == '__main__':
+            prefs = preferences.addons[__name__].preferences  
+            self.host = prefs.host
+            self.port = prefs.port
+
         return wm.invoke_props_dialog(self)
 
     def draw(self, context):
@@ -1056,9 +1228,11 @@ class CursorWidget(bpy.types.Gizmo):
         v0 = b - a
         v1 = c - a
         v2 =  mathutils.Vector((x, y)) - a
-        den = v0.x * v1.y - v1.x * v0.y
-        v = (v2.x * v1.y - v1.x * v2.y) / den
-        w = (v0.x * v2.y - v2.x * v0.y) / den
+        det = v0.x * v1.y - v1.x * v0.y
+        if det == 0:
+            return [-1.0, -1.0, -1.0]
+        v = (v2.x * v1.y - v1.x * v2.y) / det
+        w = (v0.x * v2.y - v2.x * v0.y) / det
         u = 1.0 - v - w
         return [u, v, w]
 
@@ -1086,15 +1260,18 @@ class CursorWidget(bpy.types.Gizmo):
                         continue
                     else:
                         verts = [vertices[i].co for i in [pol.vertices[0], pol.vertices[2], pol.vertices[3]]]  
-                        coords2 = self.tris_barycentric(uvcoords[0], uvcoords[2], uvcoords[3], u + client.cursorSizeX, v + client.cursorSizeY)
+                        coords2 = self.tris_barycentric(uvcoords[0], uvcoords[2], uvcoords[3], u + client.cursorSizeX, v)
+                        coords3 = self.tris_barycentric(uvcoords[0], uvcoords[2], uvcoords[3], u, v + client.cursorSizeY)
                 else:
                     continue
             else:
                 verts = [vertices[i].co for i in pol.vertices]
-                coords2 = self.tris_barycentric(uvcoords[0], uvcoords[1], uvcoords[2], u + client.cursorSizeX, v + client.cursorSizeY)
-                
+                coords2 = self.tris_barycentric(uvcoords[0], uvcoords[1], uvcoords[2], u + client.cursorSizeX, v)
+                coords3 = self.tris_barycentric(uvcoords[0], uvcoords[1], uvcoords[2], u, v + client.cursorSizeY)
+
             vert = verts[0] * coords[0] + verts[1] * coords[1] + verts[2] * coords[2]
-            vert1 = verts[0] * coords2[0] + verts[1] * coords2[1] + verts[2] * coords2[2]
+            vec1 = verts[0] * coords2[0] + verts[1] * coords2[1] + verts[2] * coords2[2] - vert
+            vec2 = verts[0] * coords3[0] + verts[1] * coords3[1] + verts[2] * coords3[2] - vert
 
             normal = pol.normal.to_4d()
             normal.w = 0.0
@@ -1102,9 +1279,13 @@ class CursorWidget(bpy.types.Gizmo):
             normal.normalize()
             camNormal = mathutils.Quaternion(context.space_data.region_3d.view_rotation) @ mathutils.Vector((0, 0, -1))
             camNormal.normalize()
-            size = (vert1 - vert).magnitude * 0.25
-            self.color = (1.0, 1.0, 0.0) if normal.dot(camNormal) < 0 else (0.5, 0.5, 0.0)
-            self.matrix_offset = mathutils.Matrix.LocRotScale(vert, mathutils.Vector((0, 0, 1)).rotation_difference(pol.normal), mathutils.Vector((size, size, size)))
+            mat = mathutils.Matrix()
+            mat[0][0], mat[1][0], mat[2][0] = vec1 * 0.25
+            mat[0][1], mat[1][1], mat[2][1] = vec2 * 0.25
+            mat[0][2], mat[1][2], mat[2][2] = pol.normal * 0.25
+            mat[0][3], mat[1][3], mat[2][3] = vert
+            self.color = client.cursorColor if normal.dot(camNormal) < 0 else client.cursorColor * 0.5
+            self.matrix_offset = mat
             self.valid = True    
             break
 
@@ -1120,7 +1301,7 @@ class CursorWidget(bpy.types.Gizmo):
 
     def setup(self):
         self.valid = False
-        pass
+        
 
     def invoke(self, context, event):
         return {'RUNNING_MODAL'}
@@ -1157,12 +1338,33 @@ class CursorWidgetGroup(bpy.types.GizmoGroup):
         gz = self.gizmos[0]
         gz.matrix_basis = ob.matrix_world
 
+
+class BlenderLayerPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+
+    host: bpy.props.StringProperty(
+        name="Host",
+    )
+    port: bpy.props.IntProperty(
+        name="Port",
+    )
+    timeout: bpy.props.FloatProperty(
+        name="Timeout",
+    )
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Blender Layer connection settings")
+        layout.prop(self, 'host')
+        layout.prop(self, 'port')
+        layout.prop(self, 'timeout')
+        
 def register():  
     global client
     if client:
         client.disconnect()
     client = BlenderLayerClient()  
     
+    bpy.utils.register_class(BlenderLayerPreferences)
     bpy.utils.register_class(CursorWidget)
     bpy.utils.register_class(CursorWidgetGroup)
     bpy.utils.register_class(ConnectOperator)
@@ -1173,6 +1375,7 @@ def register():
       
 def unregister():  
     global client  
+    bpy.utils.unregister_class(BlenderLayerPreferences)
     bpy.utils.unregister_class(CursorWidget)
     bpy.utils.unregister_class(CursorWidgetGroup)
     bpy.utils.unregister_class(ConnectOperator)
@@ -1184,4 +1387,4 @@ if __name__ == '__main__':
         print("[Blender Layer] Plugin is already registered")
     else:
         register()
-        atexit.register(lambda: client.disconnect(True))
+        atexit.register(lambda: client.disconnect(True))    

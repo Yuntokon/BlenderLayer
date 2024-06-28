@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Service
 ServiceTypes=Krita/PythonPlugin
-X-KDE-Library=blender_layer
+X-KDE-Library=blender_layer2
 X-Python-2-Compatible=false
 X-Krita-Manual=Manual.html
-Name=Blender Layer
+Name=Blender Layer Dev
 Comment=Stream a 3d View from Blender directly into Krita
