@@ -897,6 +897,7 @@ class BlenderLayer(DockWidget):
             self.server.signals.connected.connect(self.onServerConnected)
             self.server.signals.error.connect(self.setStatus)
             self.server.signals.msgReceived.connect(self.handleMessage)
+            self.server.signals.refresh.connect(self.refresh)
             self.activeDocument = instance.activeDocument()
             self.activeInFile = self.activeDocument.fileName()
 
@@ -1009,7 +1010,10 @@ class BlenderLayer(DockWidget):
             self.setStatus('[Blender] ' + i18n(msg[1]))
         else:
             print("Received unrecognized message type from Blender: ", type)  
-            
+        
+    def refresh(self):
+        self.activeDocument.refreshProjection()
+                
     def createAssistants(self):
         (fileName, mime) = QFileDialog.getSaveFileName(self, i18n("Save File"), os.path.join(QStandardPaths.writableLocation(QStandardPaths.PicturesLocation), 'blenderlayer.paintingassistant'), i18n("Krita Assistant (*.paintingassistant)"))
         if fileName:
@@ -1481,7 +1485,7 @@ class BlenderLayer(DockWidget):
         self.settings.convertBGR = instance.readSetting('blender_layer', 'convertBGR', 'True') == 'True'
        
         self.settings.backgroundDraw = instance.readSetting('blender_layer', 'backgroundDraw', 'False') == 'True'
-        lockFramesStr = instance.readSetting('blender_layer', 'lockFrames', '')
+        lockFramesStr = instance.readSetting('blender_layer', 'lockFrames1', '')
 
         try:
             self.settings.port = int(portStr)
@@ -1500,7 +1504,7 @@ class BlenderLayer(DockWidget):
         try:
             self.settings.lockFrames = int(lockFramesStr)
         except ValueError:
-            self.settings.lockFrames = 10
+            self.settings.lockFrames = 1
             
     def writeSettings(self):
         instance.writeSetting('blender_layer', 'blenderPath', self.settings.blenderPath)
@@ -1518,4 +1522,4 @@ class BlenderLayer(DockWidget):
         instance.writeSetting('blender_layer', 'colorManageBlender', str(self.settings.colorManageBlender))
         instance.writeSetting('blender_layer', 'convertBGR', str(self.settings.convertBGR))
         instance.writeSetting('blender_layer', 'backgroundDraw', str(self.settings.backgroundDraw))
-        instance.writeSetting('blender_layer', 'lockFrames', str(self.settings.lockFrames))
+        instance.writeSetting('blender_layer', 'lockFrames1', str(self.settings.lockFrames))

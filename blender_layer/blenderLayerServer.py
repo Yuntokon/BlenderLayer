@@ -32,6 +32,7 @@ class RunnableSignals(QObject):
     connected = pyqtSignal(bool, object)
     error = pyqtSignal(str)
     msgReceived = pyqtSignal(object)
+    refresh = pyqtSignal()
 
 class BlenderLayerServer(QRunnable):
     def __init__(self, settings):
@@ -51,6 +52,7 @@ class BlenderLayerServer(QRunnable):
         d = None
         l = None
         locked = False
+        refresh = False
         framesLocked = 0
             
         try:     
@@ -192,7 +194,11 @@ class BlenderLayerServer(QRunnable):
                                                 l.setPixelData(QByteArray(msg[5]), x, y, w, h)
                                             elif shm:
                                                 l.setPixelData(QByteArray(shm.buf.tobytes()), x, y, w, h)
-                                            d.refreshProjection()
+                                            
+                                            if locked:
+                                                refresh = True
+                                            else:
+                                                self.signals.refresh.emit();
                                             if modifiedSupported:
                                                 d.setModified(True)
                                         elif msg[0] == 'updateFromFile' or msg[0] == 'updateFrameFromFile':
@@ -224,7 +230,10 @@ class BlenderLayerServer(QRunnable):
                                                         l.setPixelData(QByteArray(bytes(d.width() * d.height() * 4)), 0, 0, d.width(), d.height())
 
                                                 l.setPixelData(QByteArray.fromRawData(bits.asarray(frame.sizeInBytes())), x, y, w, h)
-                                                d.refreshProjection()
+                                                if locked:
+                                                    refresh = True
+                                                else:
+                                                    self.signals.refresh.emit();
                                             else:
                                                 self.signals.error.emit(i18n("Warning: Failed to open a rendered frame"))
                                             if modifiedSupported:
@@ -300,6 +309,10 @@ class BlenderLayerServer(QRunnable):
                             framesLocked = framesLocked + 1
                             if framesLocked >= self.settings.lockFrames:
                                 d.unlock()
+                                if refresh:
+                                    self.signals.refresh.emit();
+                                    #d.refreshProjection()
+                                    refresh = False
                                 locked = False
                                 framesLocked = 0
                                 
@@ -343,6 +356,10 @@ class BlenderLayerServer(QRunnable):
                 d.unlock()
         except Exception as e:
             print(e)
+            
+        if refresh:
+            d.refreshProjection()
+            refresh = False
             
         try:
             if s:
